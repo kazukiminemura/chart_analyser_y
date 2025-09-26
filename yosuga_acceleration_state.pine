@@ -38,6 +38,17 @@ accelThreshold = input.float(2.5, "ACCEL Threshold", minval=0.1, group=groupThre
 decelThreshold = input.float(2.5, "DECEL Threshold", minval=0.1, group=groupThresholds)
 neutralBand = input.float(0.2, "Neutral Deadband", minval=0.0, group=groupThresholds, tooltip="Keeps the state neutral when score is near zero")
 
+groupAutoLines = "Auto Swing Lines"
+showAutoLines = input.bool(true, "Show Auto Swing Lines", group=groupAutoLines, tooltip="Draw swing-derived lines that react to scale changes")
+autoLineWidth = input.int(2, "Auto Line Width", minval=1, maxval=4, group=groupAutoLines)
+autoExtendRight = input.bool(true, "Extend Auto Lines Right", group=groupAutoLines)
+autoHighColor = input.color(color.orange, "High Line Color", group=groupAutoLines)
+autoLowColor = input.color(color.aqua, "Low Line Color", group=groupAutoLines)
+
+groupDisplay = "Display"
+showStateText = input.bool(true, "Show Japanese State Text", group=groupDisplay, tooltip="Plots \u52A0\u901F\u4E2D/\u6E1B\u901F\u4E2D/\u4E2D\u7ACB near price")
+stateTextOffsetATR = input.float(1.0, "State Text Offset (ATR)", minval=0.0, group=groupDisplay, tooltip="Vertical offset in ATR multiples for the state label")
+
 // === Helper Types & Functions ===
 type SwingState
     float lastPivotPrice = na
@@ -84,6 +95,9 @@ f_newPivot(series float pivot) =>
 f_series(string tf, series float source) =>
     tf == "" ? source : request.security(syminfo.tickerid, tf, source, lookahead=barmerge.lookahead_off)
 
+f_series_int(string tf, series int source) =>
+    tf == "" ? source : request.security(syminfo.tickerid, tf, source, lookahead=barmerge.lookahead_off)
+
 f_tanh(float x) =>
     // Clamp input to avoid overflow in exp
     float clamped = math.max(math.min(x, 30.0), -30.0)
@@ -93,6 +107,7 @@ f_tanh(float x) =>
 // === Series Acquisition ===
 signalClose = f_series(tfSignal, close)
 signalVolume = f_series(tfSignal, volume)
+signalTime = f_series_int(tfSignal, time)
 
 signalPivotHighRaw = tfSignal == "" ? ta.pivothigh(high, pivotLen, pivotLen) : request.security(syminfo.tickerid, tfSignal, ta.pivothigh(high, pivotLen, pivotLen), lookahead=barmerge.lookahead_off)
 signalPivotLowRaw = tfSignal == "" ? ta.pivotlow(low, pivotLen, pivotLen) : request.security(syminfo.tickerid, tfSignal, ta.pivotlow(low, pivotLen, pivotLen), lookahead=barmerge.lookahead_off)
@@ -103,6 +118,21 @@ trendPivotLowRaw = tfTrend == "" ? signalPivotLowRaw : request.security(syminfo.
 // === Swing State Updates ===
 var SwingState signalState = f_newSwingState()
 var SwingState trendState = f_newSwingState()
+var line swingHighLine = na
+var line swingLowLine = na
+var float lastAutoHighValue = na
+var float prevAutoHighValue = na
+var float lastAutoLowValue = na
+var float prevAutoLowValue = na
+var float lastAutoHighIndex = na
+var float prevAutoHighIndex = na
+var float lastAutoLowIndex = na
+var float prevAutoLowIndex = na
+var int lastAutoHighTime = na
+var int prevAutoHighTime = na
+var int lastAutoLowTime = na
+var int prevAutoLowTime = na
+var label stateTextLabel = na
 
 signalPivotHigh = f_newPivot(signalPivotHighRaw)
 signalPivotLow = f_newPivot(signalPivotLowRaw)
@@ -111,6 +141,59 @@ trendPivotLow = f_newPivot(trendPivotLowRaw)
 
 signalState := f_updateSwingState(signalState, signalPivotHigh, signalPivotLow)
 trendState := f_updateSwingState(trendState, trendPivotHigh, trendPivotLow)
+
+if not na(signalPivotHigh)
+    prevAutoHighValue := lastAutoHighValue
+    prevAutoHighIndex := lastAutoHighIndex
+    prevAutoHighTime := lastAutoHighTime
+    lastAutoHighValue := signalPivotHigh
+    lastAutoHighIndex := float(bar_index - pivotLen)
+    lastAutoHighTime := signalTime[pivotLen]
+
+if not na(signalPivotLow)
+    prevAutoLowValue := lastAutoLowValue
+    prevAutoLowIndex := lastAutoLowIndex
+    prevAutoLowTime := lastAutoLowTime
+    lastAutoLowValue := signalPivotLow
+    lastAutoLowIndex := float(bar_index - pivotLen)
+    lastAutoLowTime := signalTime[pivotLen]
+
+bool canDrawHighLine = showAutoLines and not na(prevAutoHighValue) and not na(lastAutoHighValue) and not na(prevAutoHighIndex) and not na(lastAutoHighIndex) and not na(prevAutoHighTime) and not na(lastAutoHighTime)
+bool canDrawLowLine = showAutoLines and not na(prevAutoLowValue) and not na(lastAutoLowValue) and not na(prevAutoLowIndex) and not na(lastAutoLowIndex) and not na(prevAutoLowTime) and not na(lastAutoLowTime)
+
+if not showAutoLines
+    if not na(swingHighLine)
+        line.delete(swingHighLine)
+        swingHighLine := na
+    if not na(swingLowLine)
+        line.delete(swingLowLine)
+        swingLowLine := na
+else
+    if canDrawHighLine
+        if na(swingHighLine)
+            swingHighLine := line.new(prevAutoHighTime, prevAutoHighValue, lastAutoHighTime, lastAutoHighValue, xloc=xloc.bar_time, extend=autoExtendRight ? extend.right : extend.none, color=autoHighColor, width=autoLineWidth)
+        else
+            line.set_xy1(swingHighLine, prevAutoHighTime, prevAutoHighValue)
+            line.set_xy2(swingHighLine, lastAutoHighTime, lastAutoHighValue)
+            line.set_extend(swingHighLine, autoExtendRight ? extend.right : extend.none)
+            line.set_color(swingHighLine, autoHighColor)
+            line.set_width(swingHighLine, autoLineWidth)
+    else if not na(swingHighLine)
+        line.delete(swingHighLine)
+        swingHighLine := na
+
+    if canDrawLowLine
+        if na(swingLowLine)
+            swingLowLine := line.new(prevAutoLowTime, prevAutoLowValue, lastAutoLowTime, lastAutoLowValue, xloc=xloc.bar_time, extend=autoExtendRight ? extend.right : extend.none, color=autoLowColor, width=autoLineWidth)
+        else
+            line.set_xy1(swingLowLine, prevAutoLowTime, prevAutoLowValue)
+            line.set_xy2(swingLowLine, lastAutoLowTime, lastAutoLowValue)
+            line.set_extend(swingLowLine, autoExtendRight ? extend.right : extend.none)
+            line.set_color(swingLowLine, autoLowColor)
+            line.set_width(swingLowLine, autoLineWidth)
+    else if not na(swingLowLine)
+        line.delete(swingLowLine)
+        swingLowLine := na
 
 // === Direction Resolution ===
 float derivedDir = signalState.trend != 0 ? signalState.trend : trendState.trend != 0 ? trendState.trend : math.sign(ta.ema(signalClose, emaFast) - ta.ema(signalClose, emaSlow))
@@ -169,6 +252,28 @@ confidence = maxThreshold == 0.0 ? 0.0 : math.min(math.abs(score) / maxThreshold
 confidencePct = math.round(confidence * 100.0)
 
 color stateColor = stateLabel == "ACCEL" ? color.new(color.teal, 0) : stateLabel == "DECEL" ? color.new(color.red, 0) : color.new(color.gray, 30)
+
+if showStateText
+    string jpState = stateLabel == "ACCEL" ? "\u52A0\u901F\u4E2D" : stateLabel == "DECEL" ? "\u6E1B\u901F\u4E2D" : "\u4E2D\u7ACB"
+    color jpTextColor = stateLabel == "ACCEL" ? color.teal : stateLabel == "DECEL" ? color.red : color.gray
+    float atrForLabel = nz(signalATR, ta.atr(atrLen))
+    float offsetValue = stateTextOffsetATR * atrForLabel
+    float anchorPrice = signalClose
+    if stateLabel == "ACCEL"
+        anchorPrice += offsetValue
+    else if stateLabel == "DECEL"
+        anchorPrice -= offsetValue
+    if na(stateTextLabel)
+        stateTextLabel := label.new(bar_index, anchorPrice, jpState, xloc=xloc.bar_index, textcolor=jpTextColor, style=label.style_label_left, color=color.new(stateColor, 70))
+    else
+        label.set_xy(stateTextLabel, bar_index, anchorPrice)
+        label.set_text(stateTextLabel, jpState)
+        label.set_textcolor(stateTextLabel, jpTextColor)
+        label.set_color(stateTextLabel, color.new(stateColor, 70))
+else if not na(stateTextLabel)
+    label.delete(stateTextLabel)
+    stateTextLabel := na
+
 bgcolor(color.new(stateColor, 85), title="State Background")
 
 plot(score, "Acceleration Score", color=color.white, linewidth=2)
