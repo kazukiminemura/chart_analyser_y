@@ -40,18 +40,18 @@ neutralBand = input.float(0.2, "Neutral Deadband", minval=0.0, group=groupThresh
 
 // === Helper Types & Functions ===
 type SwingState
-    float lastPivotPrice
-    bool lastWasHigh
-    float currLeg
-    float prevLeg
-    float lastHigh
-    float prevHigh
-    float lastLow
-    float prevLow
-    int trend
+    float lastPivotPrice = na
+    bool lastWasHigh = false
+    float currLeg = na
+    float prevLeg = na
+    float lastHigh = na
+    float prevHigh = na
+    float lastLow = na
+    float prevLow = na
+    int trend = 0
 
 f_newSwingState() =>
-    SwingState(na, false, na, na, na, na, na, na, 0)
+    SwingState.new()
 
 f_updateSwingState(SwingState state, float pivotHigh, float pivotLow) =>
     if not na(pivotHigh)
@@ -84,6 +84,12 @@ f_newPivot(series float pivot) =>
 f_series(string tf, series float source) =>
     tf == "" ? source : request.security(syminfo.tickerid, tf, source, lookahead=barmerge.lookahead_off)
 
+f_tanh(float x) =>
+    // Clamp input to avoid overflow in exp
+    float clamped = math.max(math.min(x, 30.0), -30.0)
+    float e2x = math.exp(2.0 * clamped)
+    (e2x - 1.0) / (e2x + 1.0)
+
 // === Series Acquisition ===
 signalClose = f_series(tfSignal, close)
 signalVolume = f_series(tfSignal, volume)
@@ -107,33 +113,29 @@ signalState := f_updateSwingState(signalState, signalPivotHigh, signalPivotLow)
 trendState := f_updateSwingState(trendState, trendPivotHigh, trendPivotLow)
 
 // === Direction Resolution ===
-float derivedDir =
-    signalState.trend != 0 ? signalState.trend :
-    trendState.trend != 0 ? trendState.trend :
-    math.sign(ta.ema(signalClose, emaFast) - ta.ema(signalClose, emaSlow))
-
+float derivedDir = signalState.trend != 0 ? signalState.trend : trendState.trend != 0 ? trendState.trend : math.sign(ta.ema(signalClose, emaFast) - ta.ema(signalClose, emaSlow))
 float baseDir = derivedDir > 0 ? 1.0 : derivedDir < 0 ? -1.0 : 0.0
 
 // === Component Calculations ===
 legRatio = na(signalState.currLeg) or na(signalState.prevLeg) or signalState.prevLeg == 0.0 ? na : signalState.currLeg / signalState.prevLeg
-legComponent = na(legRatio) or baseDir == 0.0 ? 0.0 : legWeight * math.tanh((legRatio - 1.0) * legSensitivity) * baseDir
+legComponent = na(legRatio) or baseDir == 0.0 ? 0.0 : legWeight * f_tanh((legRatio - 1.0) * legSensitivity) * baseDir
 
 signalATR = tfSignal == "" ? ta.atr(atrLen) : request.security(syminfo.tickerid, tfSignal, ta.atr(atrLen), lookahead=barmerge.lookahead_off)
 atrBaseline = ta.sma(signalATR, atrSmooth)
 atrDelta = na(atrBaseline) or atrBaseline == 0.0 ? 0.0 : (signalATR / atrBaseline) - 1.0
-atrComponent = baseDir == 0.0 ? 0.0 : atrWeight * math.tanh(atrDelta * atrSensitivity) * baseDir
+atrComponent = baseDir == 0.0 ? 0.0 : atrWeight * f_tanh(atrDelta * atrSensitivity) * baseDir
 
 volBaseline = ta.sma(signalVolume, volLen)
 highestVol = ta.highest(signalVolume, volLen)
 lowestVol = ta.lowest(signalVolume, volLen)
 bool volumeUsable = useVolume and not na(signalVolume) and not na(highestVol) and not na(lowestVol) and highestVol != lowestVol
 volDelta = na(volBaseline) or volBaseline == 0.0 ? 0.0 : (signalVolume / volBaseline) - 1.0
-volComponent = volumeUsable and baseDir != 0.0 ? volWeight * math.tanh(volDelta * volSensitivity) * baseDir : 0.0
+volComponent = volumeUsable and baseDir != 0.0 ? volWeight * f_tanh(volDelta * volSensitivity) * baseDir : 0.0
 
 emaFastSeries = ta.ema(signalClose, emaFast)
 emaSlowSeries = ta.ema(signalClose, emaSlow)
 priceActionNorm = signalATR == 0.0 ? emaFastSeries - emaSlowSeries : (emaFastSeries - emaSlowSeries) / signalATR
-priceActionComponent = priceActionWeight * math.tanh(priceActionNorm * priceActionSensitivity) * (baseDir == 0.0 ? math.sign(priceActionNorm) : baseDir)
+priceActionComponent = priceActionWeight * f_tanh(priceActionNorm * priceActionSensitivity) * (baseDir == 0.0 ? math.sign(priceActionNorm) : baseDir)
 
 trendDir = trendState.trend
 signalDir = signalState.trend
@@ -192,3 +194,6 @@ if barstate.islast
 alertcondition(stateLabel == "ACCEL" and stateLabel[1] != "ACCEL", "State: ACCEL", "Acceleration detected on {{ticker}} @ {{interval}}")
 alertcondition(stateLabel == "DECEL" and stateLabel[1] != "DECEL", "State: DECEL", "Deceleration detected on {{ticker}} @ {{interval}}")
 alertcondition(stateLabel == "NEUTRAL" and stateLabel[1] != "NEUTRAL", "State: NEUTRAL", "Neutral state on {{ticker}} @ {{interval}}")
+
+
+
