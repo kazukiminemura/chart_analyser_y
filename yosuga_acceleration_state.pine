@@ -3,7 +3,7 @@ indicator("Yosuga Acceleration State Analyzer", shorttitle="YosugaAccel", overla
 
 // === Input Configuration ===
 groupSwing = "Swing Detection"
-pivotLen = input.int(5, "Pivot Length", minval=1, group=groupSwing, tooltip="Pivot identifier (left/right bars) used for swing leg calculations")
+pivotLen = input.int(10, "Pivot Length", minval=1, group=groupSwing, tooltip="Pivot identifier (left/right bars) used for swing leg calculations")
 holdBars = input.int(3, "Minimum Bars To Hold State", minval=0, group=groupSwing, tooltip="Prevents rapid flipping by enforcing a minimum hold duration")
 
 groupMTF = "Trend Context"
@@ -38,12 +38,13 @@ accelThreshold = input.float(2.5, "ACCEL Threshold", minval=0.1, group=groupThre
 decelThreshold = input.float(2.5, "DECEL Threshold", minval=0.1, group=groupThresholds)
 neutralBand = input.float(0.2, "Neutral Deadband", minval=0.0, group=groupThresholds, tooltip="Keeps the state neutral when score is near zero")
 
-groupAutoLines = "Auto Swing Lines"
-showAutoLines = input.bool(true, "Show Auto Swing Lines", group=groupAutoLines, tooltip="Draw swing-derived lines that react to scale changes")
-autoLineWidth = input.int(2, "Auto Line Width", minval=1, maxval=4, group=groupAutoLines)
-autoExtendRight = input.bool(true, "Extend Auto Lines Right", group=groupAutoLines)
-autoHighColor = input.color(color.orange, "High Line Color", group=groupAutoLines)
-autoLowColor = input.color(color.aqua, "Low Line Color", group=groupAutoLines)
+groupHiLoLines = "High/Low Lines"
+showHiLoLines = input.bool(true, "Show High/Low Lines", group=groupHiLoLines, tooltip="Draw horizontal lines at each detected swing high/low")
+hiLineColor = input.color(color.aqua, "High Line Color", group=groupHiLoLines)
+lowLineColor = input.color(color.aqua, "Low Line Color", group=groupHiLoLines)
+hiLoLineWidth = input.int(2, "Line Width", minval=1, maxval=4, group=groupHiLoLines)
+hiLoExtendRight = input.bool(true, "Extend Lines Right", group=groupHiLoLines)
+hiLoMaxLines = input.int(20, "Max Historical Lines Per Side", minval=1, maxval=500, group=groupHiLoLines, tooltip="Limits stored swing lines to avoid exceeding TradingView line limits")
 
 groupDisplay = "Display"
 showStateText = input.bool(true, "Show Japanese State Text", group=groupDisplay, tooltip="Plots \u52A0\u901F\u4E2D/\u6E1B\u901F\u4E2D/\u4E2D\u7ACB near price")
@@ -95,9 +96,6 @@ f_newPivot(series float pivot) =>
 f_series(string tf, series float source) =>
     tf == "" ? source : request.security(syminfo.tickerid, tf, source, lookahead=barmerge.lookahead_off)
 
-f_series_int(string tf, series int source) =>
-    tf == "" ? source : request.security(syminfo.tickerid, tf, source, lookahead=barmerge.lookahead_off)
-
 f_tanh(float x) =>
     // Clamp input to avoid overflow in exp
     float clamped = math.max(math.min(x, 30.0), -30.0)
@@ -107,7 +105,6 @@ f_tanh(float x) =>
 // === Series Acquisition ===
 signalClose = f_series(tfSignal, close)
 signalVolume = f_series(tfSignal, volume)
-signalTime = f_series_int(tfSignal, time)
 
 signalPivotHighRaw = tfSignal == "" ? ta.pivothigh(high, pivotLen, pivotLen) : request.security(syminfo.tickerid, tfSignal, ta.pivothigh(high, pivotLen, pivotLen), lookahead=barmerge.lookahead_off)
 signalPivotLowRaw = tfSignal == "" ? ta.pivotlow(low, pivotLen, pivotLen) : request.security(syminfo.tickerid, tfSignal, ta.pivotlow(low, pivotLen, pivotLen), lookahead=barmerge.lookahead_off)
@@ -118,20 +115,8 @@ trendPivotLowRaw = tfTrend == "" ? signalPivotLowRaw : request.security(syminfo.
 // === Swing State Updates ===
 var SwingState signalState = f_newSwingState()
 var SwingState trendState = f_newSwingState()
-var line swingHighLine = na
-var line swingLowLine = na
-var float lastAutoHighValue = na
-var float prevAutoHighValue = na
-var float lastAutoLowValue = na
-var float prevAutoLowValue = na
-var float lastAutoHighIndex = na
-var float prevAutoHighIndex = na
-var float lastAutoLowIndex = na
-var float prevAutoLowIndex = na
-var int lastAutoHighTime = na
-var int prevAutoHighTime = na
-var int lastAutoLowTime = na
-var int prevAutoLowTime = na
+var line[] highLines = array.new_line()
+var line[] lowLines = array.new_line()
 var label stateTextLabel = na
 
 signalPivotHigh = f_newPivot(signalPivotHighRaw)
@@ -142,58 +127,49 @@ trendPivotLow = f_newPivot(trendPivotLowRaw)
 signalState := f_updateSwingState(signalState, signalPivotHigh, signalPivotLow)
 trendState := f_updateSwingState(trendState, trendPivotHigh, trendPivotLow)
 
-if not na(signalPivotHigh)
-    prevAutoHighValue := lastAutoHighValue
-    prevAutoHighIndex := lastAutoHighIndex
-    prevAutoHighTime := lastAutoHighTime
-    lastAutoHighValue := signalPivotHigh
-    lastAutoHighIndex := float(bar_index - pivotLen)
-    lastAutoHighTime := signalTime[pivotLen]
+if showHiLoLines
+    if not na(signalPivotHigh)
+        line newHighLine = line.new(bar_index - pivotLen, signalPivotHigh, bar_index, signalPivotHigh, xloc=xloc.bar_index, extend=hiLoExtendRight ? extend.right : extend.none, color=hiLineColor, width=hiLoLineWidth)
+        array.push(highLines, newHighLine)
+        line.set_style(newHighLine, line.style_dotted)
+        if array.size(highLines) > hiLoMaxLines
+            line.delete(array.shift(highLines))
 
-if not na(signalPivotLow)
-    prevAutoLowValue := lastAutoLowValue
-    prevAutoLowIndex := lastAutoLowIndex
-    prevAutoLowTime := lastAutoLowTime
-    lastAutoLowValue := signalPivotLow
-    lastAutoLowIndex := float(bar_index - pivotLen)
-    lastAutoLowTime := signalTime[pivotLen]
+    if not na(signalPivotLow)
+        line newLowLine = line.new(bar_index - pivotLen, signalPivotLow, bar_index, signalPivotLow, xloc=xloc.bar_index, extend=hiLoExtendRight ? extend.right : extend.none, color=lowLineColor, width=hiLoLineWidth)
+        array.push(lowLines, newLowLine)
+        line.set_style(newLowLine, line.style_dotted)
+        if array.size(lowLines) > hiLoMaxLines
+            line.delete(array.shift(lowLines))
 
-bool canDrawHighLine = showAutoLines and not na(prevAutoHighValue) and not na(lastAutoHighValue) and not na(prevAutoHighIndex) and not na(lastAutoHighIndex) and not na(prevAutoHighTime) and not na(lastAutoHighTime)
-bool canDrawLowLine = showAutoLines and not na(prevAutoLowValue) and not na(lastAutoLowValue) and not na(prevAutoLowIndex) and not na(lastAutoLowIndex) and not na(prevAutoLowTime) and not na(lastAutoLowTime)
+    int highCount = array.size(highLines)
+    if highCount > 0
+        for i = 0 to highCount - 1
+            line existingHighLine = array.get(highLines, i)
+            line.set_extend(existingHighLine, hiLoExtendRight ? extend.right : extend.none)
+            line.set_color(existingHighLine, hiLineColor)
+            line.set_width(existingHighLine, hiLoLineWidth)
+            line.set_style(existingHighLine, line.style_dotted)
 
-if not showAutoLines
-    if not na(swingHighLine)
-        line.delete(swingHighLine)
-        swingHighLine := na
-    if not na(swingLowLine)
-        line.delete(swingLowLine)
-        swingLowLine := na
+    int lowCount = array.size(lowLines)
+    if lowCount > 0
+        for i = 0 to lowCount - 1
+            line existingLowLine = array.get(lowLines, i)
+            line.set_extend(existingLowLine, hiLoExtendRight ? extend.right : extend.none)
+            line.set_color(existingLowLine, lowLineColor)
+            line.set_width(existingLowLine, hiLoLineWidth)
+            line.set_style(existingLowLine, line.style_dotted)
 else
-    if canDrawHighLine
-        if na(swingHighLine)
-            swingHighLine := line.new(prevAutoHighTime, prevAutoHighValue, lastAutoHighTime, lastAutoHighValue, xloc=xloc.bar_time, extend=autoExtendRight ? extend.right : extend.none, color=autoHighColor, width=autoLineWidth)
-        else
-            line.set_xy1(swingHighLine, prevAutoHighTime, prevAutoHighValue)
-            line.set_xy2(swingHighLine, lastAutoHighTime, lastAutoHighValue)
-            line.set_extend(swingHighLine, autoExtendRight ? extend.right : extend.none)
-            line.set_color(swingHighLine, autoHighColor)
-            line.set_width(swingHighLine, autoLineWidth)
-    else if not na(swingHighLine)
-        line.delete(swingHighLine)
-        swingHighLine := na
-
-    if canDrawLowLine
-        if na(swingLowLine)
-            swingLowLine := line.new(prevAutoLowTime, prevAutoLowValue, lastAutoLowTime, lastAutoLowValue, xloc=xloc.bar_time, extend=autoExtendRight ? extend.right : extend.none, color=autoLowColor, width=autoLineWidth)
-        else
-            line.set_xy1(swingLowLine, prevAutoLowTime, prevAutoLowValue)
-            line.set_xy2(swingLowLine, lastAutoLowTime, lastAutoLowValue)
-            line.set_extend(swingLowLine, autoExtendRight ? extend.right : extend.none)
-            line.set_color(swingLowLine, autoLowColor)
-            line.set_width(swingLowLine, autoLineWidth)
-    else if not na(swingLowLine)
-        line.delete(swingLowLine)
-        swingLowLine := na
+    int highCount = array.size(highLines)
+    if highCount > 0
+        for i = 0 to highCount - 1
+            line.delete(array.get(highLines, i))
+    array.clear(highLines)
+    int lowCount = array.size(lowLines)
+    if lowCount > 0
+        for i = 0 to lowCount - 1
+            line.delete(array.get(lowLines, i))
+    array.clear(lowLines)
 
 // === Direction Resolution ===
 float derivedDir = signalState.trend != 0 ? signalState.trend : trendState.trend != 0 ? trendState.trend : math.sign(ta.ema(signalClose, emaFast) - ta.ema(signalClose, emaSlow))
