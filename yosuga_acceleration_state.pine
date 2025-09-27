@@ -46,6 +46,16 @@ hiLoLineWidth = input.int(2, "Line Width", minval=1, maxval=4, group=groupHiLoLi
 hiLoExtendRight = input.bool(true, "Extend Lines Right", group=groupHiLoLines)
 hiLoMaxLines = input.int(20, "Max Historical Lines Per Side", minval=1, maxval=500, group=groupHiLoLines, tooltip="Limits stored swing lines to avoid exceeding TradingView line limits")
 
+groupScenario = "Scenario Builder"
+showScenario = input.bool(true, "Show Scenario Arrows", group=groupScenario, tooltip="Display entry arrows when state flips and annotate take-profit targets")
+scenarioTpAtr = input.float(1.5, "Take Profit ATR Multiple", minval=0.1, step=0.1, group=groupScenario)
+scenarioArrowOffsetAtr = input.float(0.5, "Arrow Offset (ATR)", minval=0.0, step=0.1, group=groupScenario)
+scenarioLongColor = input.color(color.lime, "Long Arrow Color", group=groupScenario)
+scenarioShortColor = input.color(color.fuchsia, "Short Arrow Color", group=groupScenario)
+scenarioLabelBg = input.color(color.new(color.black, 60), "Scenario Label Background", group=groupScenario)
+scenarioMaxSignals = input.int(20, "Max Scenario Marks", minval=1, maxval=100, group=groupScenario, tooltip="Limits number of scenario arrows/labels kept on chart")
+scenarioArrowForwardBars = input.int(5, "Arrow Projection Bars", minval=1, maxval=100, group=groupScenario, tooltip="Number of bars used to project the scenario arrow forward")
+
 groupDisplay = "Display"
 showStateText = input.bool(true, "Show Japanese State Text", group=groupDisplay, tooltip="Plots \u52A0\u901F\u4E2D/\u6E1B\u901F\u4E2D/\u4E2D\u7ACB near price")
 stateTextOffsetATR = input.float(1.0, "State Text Offset (ATR)", minval=0.0, group=groupDisplay, tooltip="Vertical offset in ATR multiples for the state label")
@@ -118,6 +128,9 @@ var SwingState trendState = f_newSwingState()
 var line[] highLines = array.new_line()
 var line[] lowLines = array.new_line()
 var label stateTextLabel = na
+var line[] scenarioArrows = array.new_line()
+var label[] scenarioEntryLabels = array.new_label()
+var label[] scenarioInfoLabels = array.new_label()
 
 signalPivotHigh = f_newPivot(signalPivotHighRaw)
 signalPivotLow = f_newPivot(signalPivotLowRaw)
@@ -258,6 +271,82 @@ hline(-decelThreshold, "DECEL Threshold", color=color.red, linestyle=hline.style
 hline(0.0, "Zero", color=color.new(color.gray, 60))
 
 plotchar(stateLabel == "ACCEL", "ACCEL Flag", "A", location.top, color=color.teal, size=size.tiny)
+
+// === Scenario Visualization ===
+bool longTrigger = showScenario and stateLabel == "ACCEL" and stateLabel[1] != "ACCEL"
+bool shortTrigger = showScenario and stateLabel == "DECEL" and stateLabel[1] != "DECEL"
+float scenarioAtr = nz(signalATR, ta.atr(atrLen))
+float arrowOffset = scenarioArrowOffsetAtr * scenarioAtr
+float swingSize = na(signalState.currLeg) or signalState.currLeg <= 0 ? scenarioAtr * scenarioTpAtr : signalState.currLeg
+int projectionBars = scenarioArrowForwardBars
+float midStepFloat = math.max(1.0, math.round(projectionBars * 0.5))
+int midStep = math.max(1, projectionBars > 1 ? int(midStepFloat) : 1)
+if midStep >= projectionBars
+    midStep := projectionBars - 1
+    if midStep < 1
+        midStep := 1
+int midIndex = bar_index + midStep
+
+if longTrigger
+    float entryPriceLong = close
+    float targetPriceLong = entryPriceLong + swingSize
+    int targetIndexLong = bar_index + projectionBars
+    float offsetLong = arrowOffset > 0.0 ? arrowOffset : math.max(0.0001, math.abs(swingSize) * 0.25)
+    float startPriceLong = entryPriceLong - offsetLong
+    float midPriceLong = entryPriceLong + offsetLong
+    line longSeg1 = line.new(bar_index, startPriceLong, midIndex, midPriceLong, xloc=xloc.bar_index, extend=extend.none, color=scenarioLongColor, width=2)
+    line longSeg2 = line.new(midIndex, midPriceLong, targetIndexLong, targetPriceLong, xloc=xloc.bar_index, extend=extend.none, color=scenarioLongColor, width=2)
+    label longConditionLabel = label.new(bar_index, startPriceLong, "成立条件: ACCEL転換", xloc=xloc.bar_index, yloc=yloc.price, color=scenarioLabelBg, textcolor=color.white, style=label.style_label_left)
+    label longInfoLabel = label.new(targetIndexLong, targetPriceLong, "利磯目標: " + str.tostring(targetPriceLong, format.mintick), xloc=xloc.bar_index, yloc=yloc.price, color=scenarioLabelBg, textcolor=color.white, style=label.style_label_left)
+    array.push(scenarioArrows, longSeg1)
+    array.push(scenarioArrows, longSeg2)
+    array.push(scenarioEntryLabels, longConditionLabel)
+    array.push(scenarioInfoLabels, longInfoLabel)
+
+if shortTrigger
+    float entryPriceShort = close
+    float targetPriceShort = entryPriceShort - swingSize
+    int targetIndexShort = bar_index + projectionBars
+    float offsetShort = arrowOffset > 0.0 ? arrowOffset : math.max(0.0001, math.abs(swingSize) * 0.25)
+    float startPriceShort = entryPriceShort + offsetShort
+    float midPriceShort = entryPriceShort - offsetShort
+    line shortSeg1 = line.new(bar_index, startPriceShort, midIndex, midPriceShort, xloc=xloc.bar_index, extend=extend.none, color=scenarioShortColor, width=2)
+    line shortSeg2 = line.new(midIndex, midPriceShort, targetIndexShort, targetPriceShort, xloc=xloc.bar_index, extend=extend.none, color=scenarioShortColor, width=2)
+    label shortConditionLabel = label.new(bar_index, startPriceShort, "成立条件: DECEL転換", xloc=xloc.bar_index, yloc=yloc.price, color=scenarioLabelBg, textcolor=color.white, style=label.style_label_left)
+    label shortInfoLabel = label.new(targetIndexShort, targetPriceShort, "利磯目標: " + str.tostring(targetPriceShort, format.mintick), xloc=xloc.bar_index, yloc=yloc.price, color=scenarioLabelBg, textcolor=color.white, style=label.style_label_left)
+    array.push(scenarioArrows, shortSeg1)
+    array.push(scenarioArrows, shortSeg2)
+    array.push(scenarioEntryLabels, shortConditionLabel)
+    array.push(scenarioInfoLabels, shortInfoLabel)
+
+if longTrigger or shortTrigger
+    int scenarioCount = array.size(scenarioEntryLabels)
+    if scenarioCount > scenarioMaxSignals
+        int excess = scenarioCount - scenarioMaxSignals
+        for trimIndex = 0 to excess - 1
+            if array.size(scenarioArrows) >= 2
+                line.delete(array.shift(scenarioArrows))
+                line.delete(array.shift(scenarioArrows))
+            label.delete(array.shift(scenarioEntryLabels))
+            label.delete(array.shift(scenarioInfoLabels))
+
+if not showScenario
+    int arrowCount = array.size(scenarioArrows)
+    if arrowCount > 0
+        for i = 0 to arrowCount - 1
+            line.delete(array.get(scenarioArrows, i))
+    int entryLabelCount = array.size(scenarioEntryLabels)
+    if entryLabelCount > 0
+        for i = 0 to entryLabelCount - 1
+            label.delete(array.get(scenarioEntryLabels, i))
+    int infoLabelCount = array.size(scenarioInfoLabels)
+    if infoLabelCount > 0
+        for i = 0 to infoLabelCount - 1
+            label.delete(array.get(scenarioInfoLabels, i))
+    array.clear(scenarioArrows)
+    array.clear(scenarioEntryLabels)
+    array.clear(scenarioInfoLabels)
+
 plotchar(stateLabel == "DECEL", "DECEL Flag", "D", location.bottom, color=color.red, size=size.tiny)
 
 // === Table Output ===
