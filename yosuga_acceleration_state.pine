@@ -129,7 +129,7 @@ type Scenario
     label targetLabel = na
     label pullbackLabel = na
 
-f_scenarioCreate(int direction, int entryBar, float entryPrice, int midIndex, float midPrice, int targetBar, float targetPrice, float entryLabelPrice, string entryText, label_style entryStyle, color arrowColor, color labelBg) =>
+f_scenarioCreate(int direction, int entryBar, float entryPrice, int midIndex, float midPrice, int targetBar, float targetPrice, float entryLabelPrice, string entryText, entryStyle, color arrowColor, color labelBg) =>
     line leg1 = line.new(entryBar, entryPrice, midIndex, midPrice, xloc=xloc.bar_index, extend=extend.none, color=arrowColor, width=SCENARIO_LINE_WIDTH)
     line leg2 = line.new(midIndex, midPrice, targetBar, targetPrice, xloc=xloc.bar_index, extend=extend.none, color=arrowColor, width=SCENARIO_LINE_WIDTH)
     label entryLabel = label.new(entryBar, entryLabelPrice, entryText, xloc=xloc.bar_index, yloc=yloc.price, color=labelBg, textcolor=color.white, style=entryStyle)
@@ -149,7 +149,7 @@ f_scenarioCreate(int direction, int entryBar, float entryPrice, int midIndex, fl
     scenario.pullbackPrice := na
     scenario
 
-f_scenarioUpdatePullback(Scenario scenario, int pullbackBar, float pullbackPrice, float pullbackLabelPrice, string pullbackText, label_style pullbackStyle, color labelColor) =>
+f_scenarioUpdatePullback(Scenario scenario, int pullbackBar, float pullbackPrice, float pullbackLabelPrice, string pullbackText, pullbackStyle, color labelColor) =>
     int pullbackDistance = pullbackBar - scenario.entryBar
     if pullbackDistance < 1
         pullbackDistance := 1
