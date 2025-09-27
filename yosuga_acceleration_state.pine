@@ -348,10 +348,6 @@ else if not na(stateTextLabel)
 
 bgcolor(color.new(stateColor, 85), title="State Background")
 
-hline(accelThreshold, "ACCEL Threshold", color=color.teal, linestyle=hline.style_dashed)
-hline(-decelThreshold, "DECEL Threshold", color=color.red, linestyle=hline.style_dashed)
-hline(0.0, "Zero", color=color.new(color.gray, 60))
-
 plotchar(stateLabel == "ACCEL", "ACCEL Flag", "A", location.top, color=color.teal, size=size.tiny)
 
 // === Scenario Visualization ===
