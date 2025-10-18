@@ -1,0 +1,505 @@
+﻿//@version=5
+indicator("MTF サポレジ帯クラスタ", overlay=true, max_boxes_count=400, max_labels_count=400, max_lines_count=200)
+
+//=== タイプ定義 ===
+// ゾーン毎にピボット価格を保持するバッファ（中央値計算用）
+type ZoneBuffer
+    float[] entries
+
+//=== タイムフレーム定義 ===
+var string TF_D  = "D"
+var string TF_H1 = "60"
+
+//=== 入力項目 ===
+groupPivot   = "ピボット検出"
+groupCluster = "クラスタリング"
+groupDraw    = "描画・テーブル"
+groupDaily   = "表示設定（日足）"
+groupH1      = "表示設定（1時間）"
+groupAlert   = "アラート"
+
+dLeftBars  = input.int(3, "日足 左ピボット本数", minval=1, maxval=20, group=groupPivot)
+dRightBars = input.int(3, "日足 右ピボット本数", minval=1, maxval=20, group=groupPivot)
+hLeftBars  = input.int(5, "1時間 左ピボット本数", minval=1, maxval=20, group=groupPivot)
+hRightBars = input.int(5, "1時間 右ピボット本数", minval=1, maxval=20, group=groupPivot)
+maxLookbackBars = input.int(1500, "探索最大バー数", minval=100, maxval=10000, group=groupPivot)
+
+clusterMode     = input.string("相対(%)", "クラスタ距離モード", options=["相対(%)","絶対(価格)"], group=groupCluster)
+clusterPercent  = input.float(0.35, "クラスタ距離[%]", minval=0.05, maxval=5.0, step=0.05, group=groupCluster)
+clusterAbsolute = input.float(10.0, "クラスタ距離[価格]", minval=0.0, step=0.1, group=groupCluster)
+representativeMode = input.string("平均", "クラスタ代表値", options=["平均","中央値"], group=groupCluster)
+minTouches     = input.int(2, "表示する最小タッチ回数", minval=1, maxval=20, group=groupCluster)
+maxZonesPerTf  = input.int(12, "最大帯数（タイムフレーム別）", minval=1, maxval=30, group=groupCluster)
+
+extendLeftBars  = input.int(200, "帯の左方向延長バー数", minval=10, maxval=2000, group=groupDraw)
+extendRightBars = input.int(120, "帯の右方向延長バー数", minval=5, maxval=1000, group=groupDraw)
+tableTopN       = input.int(6, "テーブル表示上位数", minval=1, maxval=15, group=groupDraw)
+
+dailyColor        = input.color(color.new(color.red, 60), "帯カラー", group=groupDaily)
+dailyTranspStrong = input.int(20, "透過（強い帯）", minval=0, maxval=100, group=groupDaily)
+dailyTranspWeak   = input.int(75, "透過（弱い帯）", minval=0, maxval=100, group=groupDaily)
+dailyLineStrong   = input.int(3, "線幅（強い帯）", minval=1, maxval=5, group=groupDaily)
+dailyLineWeak     = input.int(1, "線幅（弱い帯）", minval=1, maxval=5, group=groupDaily)
+dailyTextColor    = input.color(color.white, "ラベル文字色", group=groupDaily)
+
+h1Color        = input.color(color.new(color.blue, 75), "帯カラー", group=groupH1)
+h1TranspStrong = input.int(35, "透過（強い帯）", minval=0, maxval=100, group=groupH1)
+h1TranspWeak   = input.int(85, "透過（弱い帯）", minval=0, maxval=100, group=groupH1)
+h1LineStrong   = input.int(2, "線幅（強い帯）", minval=1, maxval=5, group=groupH1)
+h1LineWeak     = input.int(1, "線幅（弱い帯）", minval=1, maxval=5, group=groupH1)
+h1TextColor    = input.color(color.white, "ラベル文字色", group=groupH1)
+
+alertEnableDaily = input.bool(true, "日足帯接近アラート", group=groupAlert)
+alertEnableH1    = input.bool(true, "1時間帯接近アラート", group=groupAlert)
+alertDistancePercent = input.float(0.35, "接近判定距離[%]", minval=0.05, maxval=5.0, step=0.05, group=groupAlert)
+
+clusterModeRelative = clusterMode == "相対(%)"
+useMedian = representativeMode == "中央値"
+
+//=== 共通ユーティリティ ===
+
+// 値を指定範囲に収める
+f_clamp(_value, _min, _max) =>
+    math.max(_min, math.min(_max, _value))
+
+// クラスタ距離から帯パディングを計算
+f_clusterPadding(_reference) =>
+    baseRef = math.max(math.abs(_reference), syminfo.mintick)
+    padding = clusterModeRelative ? baseRef * clusterPercent * 0.01 : clusterAbsolute
+    math.max(padding, syminfo.mintick)
+
+// クラスタ代表値（平均または中央値）を計算
+f_calcCenter(_values, _useMedian) =>
+    size = array.size(_values)
+    float result = na
+    if size == 0
+        result := na
+    else
+        if _useMedian
+            temp = array.copy(_values)
+            array.sort(temp)
+            mid = size / 2
+            result := size % 2 == 0 ? (array.get(temp, mid - 1) + array.get(temp, mid)) * 0.5 : array.get(temp, mid)
+        else
+            total = 0.0
+            for i = 0 to size - 1
+                total += array.get(_values, i)
+            result := total / size
+    result
+
+// 既存ゾーンとのマッチング
+f_findZoneIndex(_price, _type, _centers, _lows, _highs, _types) =>
+    idx = -1
+    size = array.size(_centers)
+    for i = 0 to size - 1
+        if array.get(_types, i) == _type
+            center = array.get(_centers, i)
+            padRef = math.max(math.abs(center), math.abs(_price))
+            float padding = clusterModeRelative ? padRef * clusterPercent * 0.01 : clusterAbsolute
+            padding := math.max(padding, syminfo.mintick)
+            low = array.get(_lows, i)
+            high = array.get(_highs, i)
+            lowerBound = math.min(low, high) - padding
+            upperBound = math.max(low, high) + padding
+            if _price >= lowerBound and _price <= upperBound
+                idx := i
+                break
+    idx
+
+// 最大タッチ回数を取得
+f_maxTouches(_touches) =>
+    maxVal = 0
+    for i = 0 to array.size(_touches) - 1
+        maxVal := math.max(maxVal, array.get(_touches, i))
+    maxVal
+
+// タッチ回数から強度比率（0.0〜1.0）を算出
+f_calcStrengthRatio(_touches, _minTouches, _maxTouches) =>
+    ratio = 0.0
+    if _touches < _minTouches
+        ratio := 0.0
+    else
+        ratio := _maxTouches <= _minTouches ? 1.0 : f_clamp((_touches - _minTouches) / (_maxTouches - _minTouches), 0.0, 1.0)
+    ratio
+
+// 最弱ゾーンを探索（タッチ少・古い順）
+f_findWeakestIndex(_touches, _lastUpdate) =>
+    size = array.size(_touches)
+    idx = -1
+    if size > 0
+        idx := 0
+        weakestTouch = array.get(_touches, 0)
+        weakestAge = array.get(_lastUpdate, 0)
+        for i = 1 to size - 1
+            touch = array.get(_touches, i)
+            age = array.get(_lastUpdate, i)
+            if touch < weakestTouch or (touch == weakestTouch and age < weakestAge)
+                idx := i
+                weakestTouch := touch
+                weakestAge := age
+    idx
+
+// ゾーン削除と付随オブジェクトの掃除
+f_removeZone(_idx, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
+    if _idx >= 0 and _idx < array.size(_lows)
+        boxRef = array.remove(_boxes, _idx)
+        if not na(boxRef)
+            box.delete(boxRef)
+        labelRef = array.remove(_labels, _idx)
+        if not na(labelRef)
+            label.delete(labelRef)
+        array.remove(_lows, _idx)
+        array.remove(_highs, _idx)
+        array.remove(_centers, _idx)
+        array.remove(_touches, _idx)
+        array.remove(_types, _idx)
+        array.remove(_lastUpdate, _idx)
+        array.remove(_buffers, _idx)
+
+// 最大帯数を超える場合に間引き
+f_pruneWeakZones(_maxCount, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
+    while array.size(_lows) > _maxCount
+        idx = f_findWeakestIndex(_touches, _lastUpdate)
+        if idx == -1
+            break
+        f_removeZone(idx, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels)
+
+// 古いゾーンのクリーンアップ
+f_cleanupOldZones(_maxLookback, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
+    for i = array.size(_lows) - 1 to 0 by -1
+        lastIdx = array.get(_lastUpdate, i)
+        if not na(lastIdx) and bar_index - lastIdx > _maxLookback
+            f_removeZone(i, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels)
+
+// ピボット時刻からメインチャートの bar_index を推定
+f_timeToBarIndex(_timeValue) =>
+    idx = ta.valuewhen(time >= _timeValue, bar_index, 0)
+    int out = na
+    if not na(idx)
+        out := int(idx)
+    out
+
+// ゾーンにピボットを登録・更新
+f_registerPivot(_price, _type, _pivotIndex, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
+    if na(_price)
+        na
+    else
+        idx = f_findZoneIndex(_price, _type, _centers, _lows, _highs, _types)
+        if idx != -1
+            buffer = array.get(_buffers, idx)
+            if na(buffer.entries)
+                buffer.entries := array.new_float()
+            array.push(buffer.entries, _price)
+            array.set(_buffers, idx, buffer)
+            array.set(_lows, idx, math.min(array.get(_lows, idx), _price))
+            array.set(_highs, idx, math.max(array.get(_highs, idx), _price))
+            center = f_calcCenter(buffer.entries, useMedian)
+            array.set(_centers, idx, nz(center, _price))
+            array.set(_touches, idx, array.get(_touches, idx) + 1)
+            array.set(_lastUpdate, idx, _pivotIndex)
+        else
+            bufferNew = ZoneBuffer.new()
+            bufferNew.entries := array.new_float()
+            array.push(bufferNew.entries, _price)
+            array.push(_buffers, bufferNew)
+            array.push(_lows, _price)
+            array.push(_highs, _price)
+            array.push(_centers, _price)
+            array.push(_touches, 1)
+            array.push(_types, _type)
+            array.push(_lastUpdate, _pivotIndex)
+            array.push(_boxes, na)
+            array.push(_labels, na)
+
+// アラート用：現在価格が帯に接近しているか判定
+f_priceNearZones(_price, _lows, _highs, _centers, _touches, _types, _lastUpdate, _minTouches, _maxLookback, _distancePercent) =>
+    result = false
+    denom = math.max(math.abs(_price), syminfo.mintick)
+    for i = 0 to array.size(_centers) - 1
+        touches = array.get(_touches, i)
+        lastIdx = array.get(_lastUpdate, i)
+        if touches >= _minTouches and not na(lastIdx) and bar_index - lastIdx <= _maxLookback
+            center = array.get(_centers, i)
+            pad = f_clusterPadding(center)
+            low = math.min(array.get(_lows, i), array.get(_highs, i)) - pad
+            high = math.max(array.get(_lows, i), array.get(_highs, i)) + pad
+            if _price >= low and _price <= high
+                result := true
+                break
+            nearest = _price < low ? low : high
+            distancePerc = math.abs(_price - nearest) / denom * 100.0
+            if distancePerc <= _distancePercent
+                result := true
+                break
+    result
+
+//=== ゾーン管理用配列 ===
+var dailyZoneLows       = array.new_float()
+var dailyZoneHighs      = array.new_float()
+var dailyZoneCenters    = array.new_float()
+var dailyZoneTouches    = array.new_int()
+var dailyZoneTypes      = array.new_int()
+var dailyZoneLastUpdate = array.new_int()
+var dailyZoneBuffers    = array.new<ZoneBuffer>()
+var dailyZoneBoxes      = array.new_box()
+var dailyZoneLabels     = array.new_label()
+
+var h1ZoneLows       = array.new_float()
+var h1ZoneHighs      = array.new_float()
+var h1ZoneCenters    = array.new_float()
+var h1ZoneTouches    = array.new_int()
+var h1ZoneTypes      = array.new_int()
+var h1ZoneLastUpdate = array.new_int()
+var h1ZoneBuffers    = array.new<ZoneBuffer>()
+var h1ZoneBoxes      = array.new_box()
+var h1ZoneLabels     = array.new_label()
+
+//=== テーブル初期化 ===
+var table zoneTable = table.new(position.top_right, 3, tableTopN + 1, border_width=1)
+if barstate.isfirst
+    table.cell(zoneTable, 0, 0, "価格")
+    table.cell(zoneTable, 1, 0, "種別")
+    table.cell(zoneTable, 2, 0, "タッチ")
+    table.cell_set_text_color(zoneTable, 0, 0, color.white)
+    table.cell_set_text_color(zoneTable, 1, 0, color.white)
+    table.cell_set_text_color(zoneTable, 2, 0, color.white)
+    table.cell_set_text_halign(zoneTable, 0, 0, text.align_center)
+    table.cell_set_text_halign(zoneTable, 1, 0, text.align_center)
+    table.cell_set_text_halign(zoneTable, 2, 0, text.align_center)
+    table.cell_set_text_valign(zoneTable, 0, 0, text.align_center)
+    table.cell_set_text_valign(zoneTable, 1, 0, text.align_center)
+    table.cell_set_text_valign(zoneTable, 2, 0, text.align_center)
+
+//=== ピボット検出（MTF） ===
+var int dailyLastHighTime = na
+var int dailyLastLowTime  = na
+var int h1LastHighTime    = na
+var int h1LastLowTime     = na
+
+dailyPivotHigh     = request.security(syminfo.tickerid, TF_D, ta.pivothigh(high, dLeftBars, dRightBars), lookahead=barmerge.lookahead_on)
+dailyPivotHighTime = request.security(syminfo.tickerid, TF_D, time[dRightBars], lookahead=barmerge.lookahead_on)
+dailyPivotLow      = request.security(syminfo.tickerid, TF_D, ta.pivotlow(low, dLeftBars, dRightBars), lookahead=barmerge.lookahead_on)
+dailyPivotLowTime  = request.security(syminfo.tickerid, TF_D, time[dRightBars], lookahead=barmerge.lookahead_on)
+
+h1PivotHigh     = request.security(syminfo.tickerid, TF_H1, ta.pivothigh(high, hLeftBars, hRightBars), lookahead=barmerge.lookahead_on)
+h1PivotHighTime = request.security(syminfo.tickerid, TF_H1, time[hRightBars], lookahead=barmerge.lookahead_on)
+h1PivotLow      = request.security(syminfo.tickerid, TF_H1, ta.pivotlow(low, hLeftBars, hRightBars), lookahead=barmerge.lookahead_on)
+h1PivotLowTime  = request.security(syminfo.tickerid, TF_H1, time[hRightBars], lookahead=barmerge.lookahead_on)
+
+//=== 日足ピボット登録 ===
+if not na(dailyPivotHigh) and not na(dailyPivotHighTime)
+    if na(dailyLastHighTime) or dailyPivotHighTime != dailyLastHighTime
+        pivotIdx = f_timeToBarIndex(dailyPivotHighTime)
+        if not na(pivotIdx) and pivotIdx <= bar_index and bar_index - pivotIdx <= maxLookbackBars
+            f_registerPivot(dailyPivotHigh, 1, pivotIdx, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
+            dailyLastHighTime := dailyPivotHighTime
+
+if not na(dailyPivotLow) and not na(dailyPivotLowTime)
+    if na(dailyLastLowTime) or dailyPivotLowTime != dailyLastLowTime
+        pivotIdx = f_timeToBarIndex(dailyPivotLowTime)
+        if not na(pivotIdx) and pivotIdx <= bar_index and bar_index - pivotIdx <= maxLookbackBars
+            f_registerPivot(dailyPivotLow, -1, pivotIdx, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
+            dailyLastLowTime := dailyPivotLowTime
+
+//=== 1時間足ピボット登録 ===
+if not na(h1PivotHigh) and not na(h1PivotHighTime)
+    if na(h1LastHighTime) or h1PivotHighTime != h1LastHighTime
+        pivotIdx = f_timeToBarIndex(h1PivotHighTime)
+        if not na(pivotIdx) and pivotIdx <= bar_index and bar_index - pivotIdx <= maxLookbackBars
+            f_registerPivot(h1PivotHigh, 1, pivotIdx, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
+            h1LastHighTime := h1PivotHighTime
+
+if not na(h1PivotLow) and not na(h1PivotLowTime)
+    if na(h1LastLowTime) or h1PivotLowTime != h1LastLowTime
+        pivotIdx = f_timeToBarIndex(h1PivotLowTime)
+        if not na(pivotIdx) and pivotIdx <= bar_index and bar_index - pivotIdx <= maxLookbackBars
+            f_registerPivot(h1PivotLow, -1, pivotIdx, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
+            h1LastLowTime := h1PivotLowTime
+
+//=== ゾーンのメンテナンス ===
+f_cleanupOldZones(maxLookbackBars, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
+f_pruneWeakZones(maxZonesPerTf, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
+
+f_cleanupOldZones(maxLookbackBars, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
+f_pruneWeakZones(maxZonesPerTf, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
+
+//=== 日足帯の描画 ===
+dailyMaxTouches = f_maxTouches(dailyZoneTouches)
+for i = 0 to array.size(dailyZoneCenters) - 1
+    touches = array.get(dailyZoneTouches, i)
+    lastIdx = array.get(dailyZoneLastUpdate, i)
+    zoneBox = array.get(dailyZoneBoxes, i)
+    zoneLabel = array.get(dailyZoneLabels, i)
+    center = array.get(dailyZoneCenters, i)
+    pad = f_clusterPadding(center)
+    lowRaw = array.get(dailyZoneLows, i)
+    highRaw = array.get(dailyZoneHighs, i)
+    lower = math.min(lowRaw, highRaw) - pad
+    upper = math.max(lowRaw, highRaw) + pad
+    zoneType = array.get(dailyZoneTypes, i)
+    if touches >= minTouches and not na(lastIdx) and bar_index - lastIdx <= maxLookbackBars
+        if na(zoneBox)
+            zoneBox := box.new(bar_index - extendLeftBars, upper, bar_index + extendRightBars, lower)
+            array.set(dailyZoneBoxes, i, zoneBox)
+        else
+            box.set_lefttop(zoneBox, bar_index - extendLeftBars, upper)
+            box.set_rightbottom(zoneBox, bar_index + extendRightBars, lower)
+        ratio = f_calcStrengthRatio(touches, minTouches, dailyMaxTouches)
+        transp = int(math.round(f_clamp(dailyTranspStrong + (dailyTranspWeak - dailyTranspStrong) * (1.0 - ratio), 0, 100)))
+        fillColor = color.new(dailyColor, transp)
+        borderColor = color.new(dailyColor, int(f_clamp(transp - 20, 0, 100)))
+        box.set_bgcolor(zoneBox, fillColor)
+        box.set_border_color(zoneBox, borderColor)
+        lineWidth = int(math.round(f_clamp(dailyLineWeak + (dailyLineStrong - dailyLineWeak) * ratio, 1, 5)))
+        box.set_border_width(zoneBox, lineWidth)
+        if na(zoneLabel)
+            zoneLabel := label.new(bar_index + extendRightBars, zoneType == 1 ? upper : lower, "")
+            label.set_style(zoneLabel, label.style_label_right)
+            array.set(dailyZoneLabels, i, zoneLabel)
+        label.set_x(zoneLabel, bar_index + extendRightBars)
+        label.set_y(zoneLabel, zoneType == 1 ? upper : lower)
+        label.set_text(zoneLabel, "D (" + str.tostring(touches) + ")")
+        label.set_textcolor(zoneLabel, dailyTextColor)
+        label.set_style(zoneLabel, label.style_label_right)
+        label.set_color(zoneLabel, color.new(dailyColor, int(f_clamp(transp - 30, 0, 100))))
+        label.set_textcolor(zoneLabel, dailyTextColor)
+        label.set_size(zoneLabel, size.small)
+    else
+        if not na(zoneBox)
+            box.set_bgcolor(zoneBox, color.new(dailyColor, 100))
+            box.set_border_color(zoneBox, color.new(dailyColor, 100))
+        if not na(zoneLabel)
+            label.set_text(zoneLabel, "")
+            label.set_color(zoneLabel, color.new(dailyColor, 100))
+
+//=== 1時間帯の描画 ===
+h1MaxTouches = f_maxTouches(h1ZoneTouches)
+for i = 0 to array.size(h1ZoneCenters) - 1
+    touches = array.get(h1ZoneTouches, i)
+    lastIdx = array.get(h1ZoneLastUpdate, i)
+    zoneBox = array.get(h1ZoneBoxes, i)
+    zoneLabel = array.get(h1ZoneLabels, i)
+    center = array.get(h1ZoneCenters, i)
+    pad = f_clusterPadding(center)
+    lowRaw = array.get(h1ZoneLows, i)
+    highRaw = array.get(h1ZoneHighs, i)
+    lower = math.min(lowRaw, highRaw) - pad
+    upper = math.max(lowRaw, highRaw) + pad
+    zoneType = array.get(h1ZoneTypes, i)
+    if touches >= minTouches and not na(lastIdx) and bar_index - lastIdx <= maxLookbackBars
+        if na(zoneBox)
+            zoneBox := box.new(bar_index - extendLeftBars, upper, bar_index + extendRightBars, lower)
+            array.set(h1ZoneBoxes, i, zoneBox)
+        else
+            box.set_lefttop(zoneBox, bar_index - extendLeftBars, upper)
+            box.set_rightbottom(zoneBox, bar_index + extendRightBars, lower)
+        ratio = f_calcStrengthRatio(touches, minTouches, h1MaxTouches)
+        transp = int(math.round(f_clamp(h1TranspStrong + (h1TranspWeak - h1TranspStrong) * (1.0 - ratio), 0, 100)))
+        fillColor = color.new(h1Color, transp)
+        borderColor = color.new(h1Color, int(f_clamp(transp - 15, 0, 100)))
+        box.set_bgcolor(zoneBox, fillColor)
+        box.set_border_color(zoneBox, borderColor)
+        lineWidth = int(math.round(f_clamp(h1LineWeak + (h1LineStrong - h1LineWeak) * ratio, 1, 5)))
+        box.set_border_width(zoneBox, lineWidth)
+        if na(zoneLabel)
+            zoneLabel := label.new(bar_index + extendRightBars, zoneType == 1 ? upper : lower, "")
+            label.set_style(zoneLabel, label.style_label_right)
+            array.set(h1ZoneLabels, i, zoneLabel)
+        label.set_x(zoneLabel, bar_index + extendRightBars)
+        label.set_y(zoneLabel, zoneType == 1 ? upper : lower)
+        label.set_text(zoneLabel, "H1 (" + str.tostring(touches) + ")")
+        label.set_textcolor(zoneLabel, h1TextColor)
+        label.set_style(zoneLabel, label.style_label_right)
+        label.set_color(zoneLabel, color.new(h1Color, int(f_clamp(transp - 25, 0, 100))))
+        label.set_textcolor(zoneLabel, h1TextColor)
+        label.set_size(zoneLabel, size.tiny)
+    else
+        if not na(zoneBox)
+            box.set_bgcolor(zoneBox, color.new(h1Color, 100))
+            box.set_border_color(zoneBox, color.new(h1Color, 100))
+        if not na(zoneLabel)
+            label.set_text(zoneLabel, "")
+            label.set_color(zoneLabel, color.new(h1Color, 100))
+
+//=== アラート ===
+dailyNear = alertEnableDaily and f_priceNearZones(close, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, minTouches, maxLookbackBars, alertDistancePercent)
+h1Near    = alertEnableH1 and f_priceNearZones(close, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, minTouches, maxLookbackBars, alertDistancePercent)
+
+alertcondition(dailyNear, "Daily Zone Proximity", "価格が日足ゾーンに接近しました")
+alertcondition(h1Near, "H1 Zone Proximity", "価格が1時間ゾーンに接近しました")
+
+//=== テーブル更新 ===
+if barstate.islast
+    table.cell(zoneTable, 0, 0, "価格")
+    table.cell(zoneTable, 1, 0, "種別")
+    table.cell(zoneTable, 2, 0, "タッチ")
+
+    prices     = array.new_float()
+    typesList  = array.new_string()
+    touchesList = array.new_int()
+
+    for i = 0 to array.size(dailyZoneCenters) - 1
+        touches = array.get(dailyZoneTouches, i)
+        lastIdx = array.get(dailyZoneLastUpdate, i)
+        if touches >= minTouches and not na(lastIdx) and bar_index - lastIdx <= maxLookbackBars
+            array.push(prices, array.get(dailyZoneCenters, i))
+            array.push(typesList, "D")
+            array.push(touchesList, touches)
+
+    for i = 0 to array.size(h1ZoneCenters) - 1
+        touches = array.get(h1ZoneTouches, i)
+        lastIdx = array.get(h1ZoneLastUpdate, i)
+        if touches >= minTouches and not na(lastIdx) and bar_index - lastIdx <= maxLookbackBars
+            array.push(prices, array.get(h1ZoneCenters, i))
+            array.push(typesList, "H1")
+            array.push(touchesList, touches)
+
+    total = array.size(touchesList)
+    for i = 0 to total - 1
+        best = i
+        for j = i + 1 to total - 1
+            if array.get(touchesList, j) > array.get(touchesList, best)
+                best := j
+        if best != i
+            bestTouches = array.get(touchesList, best)
+            bestPrice = array.get(prices, best)
+            bestType = array.get(typesList, best)
+            array.set(touchesList, best, array.get(touchesList, i))
+            array.set(prices, best, array.get(prices, i))
+            array.set(typesList, best, array.get(typesList, i))
+            array.set(touchesList, i, bestTouches)
+            array.set(prices, i, bestPrice)
+            array.set(typesList, i, bestType)
+
+    for row = 0 to tableTopN - 1
+        if row < total
+            table.cell(zoneTable, 0, row + 1, str.tostring(array.get(prices, row), format.mintick))
+            table.cell(zoneTable, 1, row + 1, array.get(typesList, row))
+            table.cell(zoneTable, 2, row + 1, str.tostring(array.get(touchesList, row)))
+            table.cell_set_text_color(zoneTable, 0, row + 1, color.white)
+            table.cell_set_text_color(zoneTable, 1, row + 1, color.white)
+            table.cell_set_text_color(zoneTable, 2, row + 1, color.white)
+            table.cell_set_text_halign(zoneTable, 0, row + 1, text.align_right)
+            table.cell_set_text_halign(zoneTable, 1, row + 1, text.align_center)
+            table.cell_set_text_halign(zoneTable, 2, row + 1, text.align_center)
+            table.cell_set_text_valign(zoneTable, 0, row + 1, text.align_center)
+            table.cell_set_text_valign(zoneTable, 1, row + 1, text.align_center)
+            table.cell_set_text_valign(zoneTable, 2, row + 1, text.align_center)
+        else
+            table.cell(zoneTable, 0, row + 1, "")
+            table.cell(zoneTable, 1, row + 1, "")
+            table.cell(zoneTable, 2, row + 1, "")
+            table.cell_set_text_color(zoneTable, 0, row + 1, color.white)
+            table.cell_set_text_color(zoneTable, 1, row + 1, color.white)
+            table.cell_set_text_color(zoneTable, 2, row + 1, color.white)
+            table.cell_set_text_halign(zoneTable, 0, row + 1, text.align_center)
+            table.cell_set_text_halign(zoneTable, 1, row + 1, text.align_center)
+            table.cell_set_text_halign(zoneTable, 2, row + 1, text.align_center)
+            table.cell_set_text_valign(zoneTable, 0, row + 1, text.align_center)
+            table.cell_set_text_valign(zoneTable, 1, row + 1, text.align_center)
+            table.cell_set_text_valign(zoneTable, 2, row + 1, text.align_center)
+
+// 使い方メモ:
+// 1. ピボット幅(left/right)とクラスタ距離（% または 価格）を銘柄に合わせて微調整してください。
+// 2. 最小タッチ回数と最大帯数を調整すると、重要なゾーンだけが抽出され描画負荷も軽くなります。
+// 3. アラートは「Daily Zone Proximity」「H1 Zone Proximity」を有効化し、接近距離[%]で感度を調整してください。
