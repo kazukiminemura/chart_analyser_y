@@ -1,0 +1,71 @@
+//@version=5
+indicator("Dow Theory Multi-Timeframe Trend", overlay=true, max_labels_count=500)
+
+// Pivot length for Dow Theory swing detection
+pivotLen = input.int(3, "Pivot Length", minval=1)
+
+// Timeframes to evaluate
+tf1 = input.timeframe("5", "TF1")
+tf2 = input.timeframe("15", "TF2")
+tf3 = input.timeframe("60", "TF3")
+tf4 = input.timeframe("240", "TF4")
+tf5 = input.timeframe("D", "TF5")
+tf6 = input.timeframe("W", "TF6")
+
+// Dow Theory trend calculation: +1 up, -1 down, 0 neutral
+calcTrend() =>
+    var float lastHigh = na
+    var float prevHigh = na
+    var float lastLow = na
+    var float prevLow = na
+
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+    if not na(ph)
+        prevHigh := lastHigh
+        lastHigh := ph
+    if not na(pl)
+        prevLow := lastLow
+        lastLow := pl
+
+    up = not na(lastHigh) and not na(prevHigh) and not na(lastLow) and not na(prevLow) and lastHigh > prevHigh and lastLow > prevLow
+    down = not na(lastHigh) and not na(prevHigh) and not na(lastLow) and not na(prevLow) and lastHigh < prevHigh and lastLow < prevLow
+    up ? 1 : down ? -1 : 0
+
+trendLabel(tr) =>
+    tr == 1 ? "Up" : tr == -1 ? "Down" : "Side"
+
+trendColor(tr) =>
+    tr == 1 ? color.new(color.green, 0) : tr == -1 ? color.new(color.red, 0) : color.new(color.gray, 0)
+
+trend_tf1 = request.security(syminfo.tickerid, tf1, calcTrend())
+trend_tf2 = request.security(syminfo.tickerid, tf2, calcTrend())
+trend_tf3 = request.security(syminfo.tickerid, tf3, calcTrend())
+trend_tf4 = request.security(syminfo.tickerid, tf4, calcTrend())
+trend_tf5 = request.security(syminfo.tickerid, tf5, calcTrend())
+trend_tf6 = request.security(syminfo.tickerid, tf6, calcTrend())
+
+// Table UI
+var table t = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 80))
+if barstate.islast
+    table.cell(t, 0, 0, "TF", text_color=color.white, text_halign=text.align_center)
+    table.cell(t, 1, 0, "Trend", text_color=color.white, text_halign=text.align_center)
+
+    table.cell(t, 0, 1, tf1, text_color=color.white)
+    table.cell(t, 1, 1, trendLabel(trend_tf1), text_color=color.white, bgcolor=trendColor(trend_tf1))
+
+    table.cell(t, 0, 2, tf2, text_color=color.white)
+    table.cell(t, 1, 2, trendLabel(trend_tf2), text_color=color.white, bgcolor=trendColor(trend_tf2))
+
+    table.cell(t, 0, 3, tf3, text_color=color.white)
+    table.cell(t, 1, 3, trendLabel(trend_tf3), text_color=color.white, bgcolor=trendColor(trend_tf3))
+
+    table.cell(t, 0, 4, tf4, text_color=color.white)
+    table.cell(t, 1, 4, trendLabel(trend_tf4), text_color=color.white, bgcolor=trendColor(trend_tf4))
+
+    table.cell(t, 0, 5, tf5, text_color=color.white)
+    table.cell(t, 1, 5, trendLabel(trend_tf5), text_color=color.white, bgcolor=trendColor(trend_tf5))
+
+    table.cell(t, 0, 6, tf6, text_color=color.white)
+    table.cell(t, 1, 6, trendLabel(trend_tf6), text_color=color.white, bgcolor=trendColor(trend_tf6))
