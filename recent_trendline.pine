@@ -1,0 +1,195 @@
+//@version=5
+indicator("Recent Trendline", overlay=true, max_lines_count=20)
+
+// === Inputs ===
+pivotLen     = input.int(3, "Pivot Length", minval=1)
+directionOpt = input.string("Auto", "Direction", options=["Auto", "Down", "Up"])
+enforceLine  = input.bool(true, "Enforce (no break between pivots)")
+allowFlat    = input.bool(false, "Allow Flat Slope")
+tolerancePts = input.float(0.0, "Tolerance (price units)", minval=0.0, step=0.0001)
+lineColor    = input.color(color.new(color.blue, 0), "Line Color")
+lineWidth    = input.int(2, "Line Width", minval=1, maxval=4)
+lineStyleTxt = input.string("Dotted", "Line Style", options=["Solid", "Dashed", "Dotted"])
+lineStyle    = lineStyleTxt == "Dashed" ? line.style_dashed : lineStyleTxt == "Dotted" ? line.style_dotted : line.style_solid
+htfTf        = input.timeframe("15", "Other Timeframe")
+showHtfLine  = input.bool(true, "Show Other TF Line")
+htfLineColor = input.color(color.new(color.orange, 0), "Other TF Line Color")
+
+// === Pivot tracking ===
+var int   lastHighBar = na
+var float lastHighPrice = na
+var int   prevHighBar = na
+var float prevHighPrice = na
+
+var int   lastLowBar = na
+var float lastLowPrice = na
+var int   prevLowBar = na
+var float prevLowPrice = na
+
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+if not na(ph)
+    prevHighBar := lastHighBar
+    prevHighPrice := lastHighPrice
+    lastHighBar := bar_index - pivotLen
+    lastHighPrice := ph
+
+if not na(pl)
+    prevLowBar := lastLowBar
+    prevLowPrice := lastLowPrice
+    lastLowBar := bar_index - pivotLen
+    lastLowPrice := pl
+
+// === Helpers ===
+calcSlopeIntercept(int x1, float y1, int x2, float y2) =>
+    float slope = (y2 - y1) / (x2 - x1)
+    float intercept = y1 - slope * x1
+    [slope, intercept]
+
+priceAt(float slope, float intercept, int x) =>
+    slope * x + intercept
+
+isLineValid(string dir, int startBar, int endBar, float slope, float intercept) =>
+    bool ok = true
+    int span = endBar - startBar
+    if span <= 0
+        ok := false
+    else
+        for i = 0 to span
+            int x = startBar + i
+            int barsAgo = bar_index - x
+            if barsAgo >= 0
+                float lineVal = priceAt(slope, intercept, x)
+                if dir == "Down"
+                    if high[barsAgo] > lineVal + tolerancePts
+                        ok := false
+                        break
+                else
+                    if low[barsAgo] < lineVal - tolerancePts
+                        ok := false
+                        break
+    ok
+
+// === Other timeframe pivots (time-based) ===
+f_pivots_other() =>
+    var int   lastHighTime = na
+    var float lastHighPrice = na
+    var int   prevHighTime = na
+    var float prevHighPrice = na
+    var int   lastLowTime = na
+    var float lastLowPrice = na
+    var int   prevLowTime = na
+    var float prevLowPrice = na
+
+    ph_o = ta.pivothigh(high, pivotLen, pivotLen)
+    pl_o = ta.pivotlow(low, pivotLen, pivotLen)
+
+    if not na(ph_o)
+        prevHighTime := lastHighTime
+        prevHighPrice := lastHighPrice
+        lastHighTime := time[pivotLen]
+        lastHighPrice := ph_o
+
+    if not na(pl_o)
+        prevLowTime := lastLowTime
+        prevLowPrice := lastLowPrice
+        lastLowTime := time[pivotLen]
+        lastLowPrice := pl_o
+
+    [prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, prevLowTime, lastLowTime, prevLowPrice, lastLowPrice]
+
+[htfPrevHighTime, htfLastHighTime, htfPrevHighPrice, htfLastHighPrice,
+ htfPrevLowTime, htfLastLowTime, htfPrevLowPrice, htfLastLowPrice] =
+     request.security(syminfo.tickerid, htfTf, f_pivots_other(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// === Select direction ===
+string useDir = directionOpt
+if directionOpt == "Auto"
+    int lh = na(lastHighBar) ? -1 : lastHighBar
+    int ll = na(lastLowBar) ? -1 : lastLowBar
+    useDir := lh >= ll ? "Down" : "Up"
+
+// === Build trendline ===
+var line trendLine = na
+var line trendLineHtf = na
+
+var int startBar = na
+var float startPrice = na
+var int endBar = na
+var float endPrice = na
+
+if useDir == "Down"
+    if not na(prevHighBar) and not na(lastHighBar)
+        startBar := prevHighBar
+        startPrice := prevHighPrice
+        endBar := lastHighBar
+        endPrice := lastHighPrice
+else
+    if not na(prevLowBar) and not na(lastLowBar)
+        startBar := prevLowBar
+        startPrice := prevLowPrice
+        endBar := lastLowBar
+        endPrice := lastLowPrice
+
+bool hasLine = not na(startBar) and not na(endBar) and startBar < endBar
+if hasLine
+    [slope, intercept] = calcSlopeIntercept(startBar, startPrice, endBar, endPrice)
+
+    if (slope == 0 and not allowFlat)
+        hasLine := false
+    if useDir == "Down" and slope > 0
+        hasLine := false
+    if useDir == "Up" and slope < 0
+        hasLine := false
+
+    if hasLine and enforceLine
+        hasLine := isLineValid(useDir, startBar, endBar, slope, intercept)
+
+    if hasLine and barstate.islast
+        if not na(trendLine)
+            line.delete(trendLine)
+        trendLine := line.new(startBar, startPrice, bar_index, priceAt(slope, intercept, bar_index),
+          xloc=xloc.bar_index, extend=extend.right, color=lineColor, width=lineWidth, style=lineStyle)
+
+// === Build other timeframe trendline (time-based) ===
+string useDirHtf = directionOpt
+if directionOpt == "Auto"
+    int lhT = na(htfLastHighTime) ? -1 : htfLastHighTime
+    int llT = na(htfLastLowTime) ? -1 : htfLastLowTime
+    useDirHtf := lhT >= llT ? "Down" : "Up"
+
+int htfStartTime = na
+float htfStartPrice = na
+int htfEndTime = na
+float htfEndPrice = na
+
+if useDirHtf == "Down"
+    if not na(htfPrevHighTime) and not na(htfLastHighTime)
+        htfStartTime := htfPrevHighTime
+        htfStartPrice := htfPrevHighPrice
+        htfEndTime := htfLastHighTime
+        htfEndPrice := htfLastHighPrice
+else
+    if not na(htfPrevLowTime) and not na(htfLastLowTime)
+        htfStartTime := htfPrevLowTime
+        htfStartPrice := htfPrevLowPrice
+        htfEndTime := htfLastLowTime
+        htfEndPrice := htfLastLowPrice
+
+bool hasHtfLine = showHtfLine and not na(htfStartTime) and not na(htfEndTime) and htfStartTime < htfEndTime
+if hasHtfLine and barstate.islast
+    float slopeT = (htfEndPrice - htfStartPrice) / (htfEndTime - htfStartTime)
+    if (slopeT == 0 and not allowFlat)
+        hasHtfLine := false
+    if useDirHtf == "Down" and slopeT > 0
+        hasHtfLine := false
+    if useDirHtf == "Up" and slopeT < 0
+        hasHtfLine := false
+
+    if hasHtfLine
+        float endPriceNow = htfStartPrice + slopeT * (time - htfStartTime)
+        if not na(trendLineHtf)
+            line.delete(trendLineHtf)
+        trendLineHtf := line.new(htfStartTime, htfStartPrice, time, endPriceNow,
+          xloc=xloc.bar_time, extend=extend.right, color=htfLineColor, width=lineWidth, style=lineStyle)
