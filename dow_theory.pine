@@ -196,9 +196,9 @@ if barstate.islast and showEntryFibLines
         line.delete(entryLongLine)
     if not na(entryShortLine)
         line.delete(entryShortLine)
-    if not na(fibUp786)
+    if (trendUp or (not trendUp and not trendDown)) and not na(fibUp786)
         entryLongLine := line.new(bar_index - 1, fibUp786, bar_index, fibUp786, extend=extend.right, color=entryLongColor, width=entryLineWidth, style=entryLineStyleResolved)
-    if not na(fibDown786)
+    if (trendDown or (not trendUp and not trendDown)) and not na(fibDown786)
         entryShortLine := line.new(bar_index - 1, fibDown786, bar_index, fibDown786, extend=extend.right, color=entryShortColor, width=entryLineWidth, style=entryLineStyleResolved)
 
 bodyPrev = math.abs(close[1] - open[1])
@@ -229,6 +229,18 @@ var line positionLongLine = na
 var line positionShortLine = na
 var line tpLongLine = na
 var line tpShortLine = na
+
+if barstate.islast and showPositionLines
+    if not na(positionLongLine)
+        line.delete(positionLongLine)
+    if not na(positionShortLine)
+        line.delete(positionShortLine)
+
+if barstate.islast and showTakeProfitLines
+    if not na(tpLongLine)
+        line.delete(tpLongLine)
+    if not na(tpShortLine)
+        line.delete(tpShortLine)
 
 if paUp and showPositionLines and not na(fibUp786)
     if not na(positionLongLine)
