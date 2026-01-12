@@ -1,74 +1,87 @@
-ï»¿//@version=5
-indicator("MTF ã‚µãƒãƒ¬ã‚¸å¸¯ã‚¯ãƒ©ã‚¹ã‚¿", overlay=true, max_boxes_count=400, max_labels_count=400, max_lines_count=200)
+//@version=5
+indicator("MTF ƒTƒ|ƒŒƒW‘ÑƒNƒ‰ƒXƒ^", overlay=true, max_boxes_count=400, max_labels_count=400, max_lines_count=200)
 
-//=== ã‚¿ã‚¤ãƒ—å®šç¾© ===
-// ã‚¾ãƒ¼ãƒ³æ¯ã«ãƒ”ãƒœãƒƒãƒˆä¾¡æ ¼ã‚’ä¿æŒã™ã‚‹ãƒãƒƒãƒ•ã‚¡ï¼ˆä¸­å¤®å€¤è¨ˆç®—ç”¨ï¼‰
+//=== ƒ^ƒCƒv’è‹` ===
+// ƒ][ƒ“–ˆ‚Éƒsƒ{ƒbƒg‰¿Ši‚ğ•Û‚·‚éƒoƒbƒtƒ@i’†‰›’lŒvZ—pj
 type ZoneBuffer
     float[] entries
 
-//=== ã‚¿ã‚¤ãƒ ãƒ•ãƒ¬ãƒ¼ãƒ å®šç¾© ===
+//=== ƒ^ƒCƒ€ƒtƒŒ[ƒ€’è‹` ===
 var string TF_D  = "D"
 var string TF_H1 = "60"
 
-//=== å…¥åŠ›é …ç›® ===
-groupPivot   = "ãƒ”ãƒœãƒƒãƒˆæ¤œå‡º"
-groupCluster = "ã‚¯ãƒ©ã‚¹ã‚¿ãƒªãƒ³ã‚°"
-groupDraw    = "æç”»ãƒ»ãƒ†ãƒ¼ãƒ–ãƒ«"
-groupDaily   = "è¡¨ç¤ºè¨­å®šï¼ˆæ—¥è¶³ï¼‰"
-groupH1      = "è¡¨ç¤ºè¨­å®šï¼ˆ1æ™‚é–“ï¼‰"
-groupAlert   = "ã‚¢ãƒ©ãƒ¼ãƒˆ"
+//=== “ü—Í€–Ú ===
+groupPivot   = "ƒsƒ{ƒbƒgŒŸo"
+groupCluster = "ƒNƒ‰ƒXƒ^ƒŠƒ“ƒO"
+groupDraw    = "•`‰æEƒe[ƒuƒ‹"
+groupDaily   = "•\¦İ’èi“ú‘«j"
+groupH1      = "•\¦İ’èi1ŠÔj"
+groupAlert   = "ƒAƒ‰[ƒg"
 
-dLeftBars  = input.int(3, "æ—¥è¶³ å·¦ãƒ”ãƒœãƒƒãƒˆæœ¬æ•°", minval=1, maxval=20, group=groupPivot)
-dRightBars = input.int(3, "æ—¥è¶³ å³ãƒ”ãƒœãƒƒãƒˆæœ¬æ•°", minval=1, maxval=20, group=groupPivot)
-hLeftBars  = input.int(5, "1æ™‚é–“ å·¦ãƒ”ãƒœãƒƒãƒˆæœ¬æ•°", minval=1, maxval=20, group=groupPivot)
-hRightBars = input.int(5, "1æ™‚é–“ å³ãƒ”ãƒœãƒƒãƒˆæœ¬æ•°", minval=1, maxval=20, group=groupPivot)
-maxLookbackBars = input.int(1500, "æ¢ç´¢æœ€å¤§ãƒãƒ¼æ•°", minval=100, maxval=10000, group=groupPivot)
+dLeftBars  = input.int(3, "“ú‘« ¶ƒsƒ{ƒbƒg–{”", minval=1, maxval=20, group=groupPivot)
+dRightBars = input.int(3, "“ú‘« ‰Eƒsƒ{ƒbƒg–{”", minval=1, maxval=20, group=groupPivot)
+hLeftBars  = input.int(5, "1ŠÔ ¶ƒsƒ{ƒbƒg–{”", minval=1, maxval=20, group=groupPivot)
+hRightBars = input.int(5, "1ŠÔ ‰Eƒsƒ{ƒbƒg–{”", minval=1, maxval=20, group=groupPivot)
+maxLookbackBars = input.int(1500, "’TõÅ‘åƒo[”", minval=100, maxval=10000, group=groupPivot)
 
-clusterMode     = input.string("ç›¸å¯¾(%)", "ã‚¯ãƒ©ã‚¹ã‚¿è·é›¢ãƒ¢ãƒ¼ãƒ‰", options=["ç›¸å¯¾(%)","çµ¶å¯¾(ä¾¡æ ¼)"], group=groupCluster)
-clusterPercent  = input.float(0.35, "ã‚¯ãƒ©ã‚¹ã‚¿è·é›¢[%]", minval=0.05, maxval=5.0, step=0.05, group=groupCluster)
-clusterAbsolute = input.float(10.0, "ã‚¯ãƒ©ã‚¹ã‚¿è·é›¢[ä¾¡æ ¼]", minval=0.0, step=0.1, group=groupCluster)
-representativeMode = input.string("å¹³å‡", "ã‚¯ãƒ©ã‚¹ã‚¿ä»£è¡¨å€¤", options=["å¹³å‡","ä¸­å¤®å€¤"], group=groupCluster)
-minTouches     = input.int(2, "è¡¨ç¤ºã™ã‚‹æœ€å°ã‚¿ãƒƒãƒå›æ•°", minval=1, maxval=20, group=groupCluster)
-maxZonesPerTf  = input.int(12, "æœ€å¤§å¸¯æ•°ï¼ˆã‚¿ã‚¤ãƒ ãƒ•ãƒ¬ãƒ¼ãƒ åˆ¥ï¼‰", minval=1, maxval=30, group=groupCluster)
+clusterMode     = input.string("‘Š‘Î(%)", "ƒNƒ‰ƒXƒ^‹——£ƒ‚[ƒh", options=["‘Š‘Î(%)","â‘Î(‰¿Ši)"], group=groupCluster)
+clusterPercent  = input.float(0.35, "ƒNƒ‰ƒXƒ^‹——£[%]", minval=0.05, maxval=5.0, step=0.05, group=groupCluster)
+clusterAbsolute = input.float(10.0, "ƒNƒ‰ƒXƒ^‹——£[‰¿Ši]", minval=0.0, step=0.1, group=groupCluster)
+useAdaptivePadding = input.bool(true, "Use Adaptive ATR Padding", group=groupCluster)
+adaptivePaddingAtrLength = input.int(14, "Adaptive ATR Length", minval=1, maxval=500, group=groupCluster)
+adaptivePaddingAtrMultiplier = input.float(0.5, "ATR Padding Multiplier", minval=0.05, step=0.05, group=groupCluster)
+adaptivePaddingAtrMultiplierGold = input.float(1.0, "ATR Padding Multiplier (Gold)", minval=0.05, step=0.05, group=groupCluster)
+representativeMode = input.string("•½‹Ï", "ƒNƒ‰ƒXƒ^‘ã•\’l", options=["•½‹Ï","’†‰›’l"], group=groupCluster)
+minTouches     = input.int(2, "•\¦‚·‚éÅ¬ƒ^ƒbƒ`‰ñ”", minval=1, maxval=20, group=groupCluster)
+maxZonesPerTf  = input.int(12, "Å‘å‘Ñ”iƒ^ƒCƒ€ƒtƒŒ[ƒ€•Êj", minval=1, maxval=30, group=groupCluster)
 
-extendLeftBars  = input.int(200, "å¸¯ã®å·¦æ–¹å‘å»¶é•·ãƒãƒ¼æ•°", minval=10, maxval=2000, group=groupDraw)
-extendRightBars = input.int(120, "å¸¯ã®å³æ–¹å‘å»¶é•·ãƒãƒ¼æ•°", minval=5, maxval=1000, group=groupDraw)
-tableTopN       = input.int(6, "ãƒ†ãƒ¼ãƒ–ãƒ«è¡¨ç¤ºä¸Šä½æ•°", minval=1, maxval=15, group=groupDraw)
+extendLeftBars  = input.int(200, "‘Ñ‚Ì¶•ûŒü‰„’·ƒo[”", minval=10, maxval=2000, group=groupDraw)
+extendRightBars = input.int(120, "‘Ñ‚Ì‰E•ûŒü‰„’·ƒo[”", minval=5, maxval=1000, group=groupDraw)
+tableTopN       = input.int(6, "ƒe[ƒuƒ‹•\¦ãˆÊ”", minval=1, maxval=15, group=groupDraw)
 
-dailyColor        = input.color(color.new(color.red, 60), "å¸¯ã‚«ãƒ©ãƒ¼", group=groupDaily)
-dailyTranspStrong = input.int(20, "é€éï¼ˆå¼·ã„å¸¯ï¼‰", minval=0, maxval=100, group=groupDaily)
-dailyTranspWeak   = input.int(75, "é€éï¼ˆå¼±ã„å¸¯ï¼‰", minval=0, maxval=100, group=groupDaily)
-dailyLineStrong   = input.int(3, "ç·šå¹…ï¼ˆå¼·ã„å¸¯ï¼‰", minval=1, maxval=5, group=groupDaily)
-dailyLineWeak     = input.int(1, "ç·šå¹…ï¼ˆå¼±ã„å¸¯ï¼‰", minval=1, maxval=5, group=groupDaily)
-dailyTextColor    = input.color(color.white, "ãƒ©ãƒ™ãƒ«æ–‡å­—è‰²", group=groupDaily)
+dailyColor        = input.color(color.new(color.red, 60), "‘ÑƒJƒ‰[", group=groupDaily)
+dailyTranspStrong = input.int(20, "“§‰ßi‹­‚¢‘Ñj", minval=0, maxval=100, group=groupDaily)
+dailyTranspWeak   = input.int(75, "“§‰ßiã‚¢‘Ñj", minval=0, maxval=100, group=groupDaily)
+dailyLineStrong   = input.int(3, "ü•i‹­‚¢‘Ñj", minval=1, maxval=5, group=groupDaily)
+dailyLineWeak     = input.int(1, "ü•iã‚¢‘Ñj", minval=1, maxval=5, group=groupDaily)
+dailyTextColor    = input.color(color.white, "ƒ‰ƒxƒ‹•¶šF", group=groupDaily)
 
-h1Color        = input.color(color.new(color.blue, 75), "å¸¯ã‚«ãƒ©ãƒ¼", group=groupH1)
-h1TranspStrong = input.int(35, "é€éï¼ˆå¼·ã„å¸¯ï¼‰", minval=0, maxval=100, group=groupH1)
-h1TranspWeak   = input.int(85, "é€éï¼ˆå¼±ã„å¸¯ï¼‰", minval=0, maxval=100, group=groupH1)
-h1LineStrong   = input.int(2, "ç·šå¹…ï¼ˆå¼·ã„å¸¯ï¼‰", minval=1, maxval=5, group=groupH1)
-h1LineWeak     = input.int(1, "ç·šå¹…ï¼ˆå¼±ã„å¸¯ï¼‰", minval=1, maxval=5, group=groupH1)
-h1TextColor    = input.color(color.white, "ãƒ©ãƒ™ãƒ«æ–‡å­—è‰²", group=groupH1)
+h1Color        = input.color(color.new(color.blue, 75), "‘ÑƒJƒ‰[", group=groupH1)
+h1TranspStrong = input.int(35, "“§‰ßi‹­‚¢‘Ñj", minval=0, maxval=100, group=groupH1)
+h1TranspWeak   = input.int(85, "“§‰ßiã‚¢‘Ñj", minval=0, maxval=100, group=groupH1)
+h1LineStrong   = input.int(2, "ü•i‹­‚¢‘Ñj", minval=1, maxval=5, group=groupH1)
+h1LineWeak     = input.int(1, "ü•iã‚¢‘Ñj", minval=1, maxval=5, group=groupH1)
+h1TextColor    = input.color(color.white, "ƒ‰ƒxƒ‹•¶šF", group=groupH1)
 
-alertEnableDaily = input.bool(true, "æ—¥è¶³å¸¯æ¥è¿‘ã‚¢ãƒ©ãƒ¼ãƒˆ", group=groupAlert)
-alertEnableH1    = input.bool(true, "1æ™‚é–“å¸¯æ¥è¿‘ã‚¢ãƒ©ãƒ¼ãƒˆ", group=groupAlert)
-alertDistancePercent = input.float(0.35, "æ¥è¿‘åˆ¤å®šè·é›¢[%]", minval=0.05, maxval=5.0, step=0.05, group=groupAlert)
+alertEnableDaily = input.bool(true, "“ú‘«‘ÑÚ‹ßƒAƒ‰[ƒg", group=groupAlert)
+alertEnableH1    = input.bool(true, "1ŠÔ‘ÑÚ‹ßƒAƒ‰[ƒg", group=groupAlert)
+alertDistancePercent = input.float(0.35, "Ú‹ß”»’è‹——£[%]", minval=0.05, maxval=5.0, step=0.05, group=groupAlert)
 
-clusterModeRelative = clusterMode == "ç›¸å¯¾(%)"
-useMedian = representativeMode == "ä¸­å¤®å€¤"
+clusterModeRelative = clusterMode == "‘Š‘Î(%)"
+useMedian = representativeMode == "’†‰›’l"
+string tickerLower = str.lower(syminfo.tickerid)
+// Flag gold tickers to allow instrument-specific ATR scaling.
+bool isGold = str.contains(tickerLower, "xau") or str.contains(tickerLower, "gold")
+float adaptiveAtrValue = ta.atr(adaptivePaddingAtrLength)
+float atrPaddingMultiplier = isGold ? adaptivePaddingAtrMultiplierGold : adaptivePaddingAtrMultiplier
 
-//=== å…±é€šãƒ¦ãƒ¼ãƒ†ã‚£ãƒªãƒ†ã‚£ ===
+//=== ‹¤’Êƒ†[ƒeƒBƒŠƒeƒB ===
 
-// å€¤ã‚’æŒ‡å®šç¯„å›²ã«åã‚ã‚‹
+// ’l‚ğw’è”ÍˆÍ‚Éû‚ß‚é
 f_clamp(_value, _min, _max) =>
     math.max(_min, math.min(_max, _value))
 
-// ã‚¯ãƒ©ã‚¹ã‚¿è·é›¢ã‹ã‚‰å¸¯ãƒ‘ãƒ‡ã‚£ãƒ³ã‚°ã‚’è¨ˆç®—
+// ƒNƒ‰ƒXƒ^‹——£‚©‚ç‘ÑƒpƒfƒBƒ“ƒO‚ğŒvZ
 f_clusterPadding(_reference) =>
     baseRef = math.max(math.abs(_reference), syminfo.mintick)
-    padding = clusterModeRelative ? baseRef * clusterPercent * 0.01 : clusterAbsolute
+    modePadding = clusterModeRelative ? baseRef * clusterPercent * 0.01 : clusterAbsolute
+    padding = modePadding
+    if useAdaptivePadding and not na(adaptiveAtrValue)
+        atrPadding = adaptiveAtrValue * atrPaddingMultiplier
+        padding := math.max(modePadding, atrPadding)
     math.max(padding, syminfo.mintick)
 
-// ã‚¯ãƒ©ã‚¹ã‚¿ä»£è¡¨å€¤ï¼ˆå¹³å‡ã¾ãŸã¯ä¸­å¤®å€¤ï¼‰ã‚’è¨ˆç®—
+// ƒNƒ‰ƒXƒ^‘ã•\’li•½‹Ï‚Ü‚½‚Í’†‰›’lj‚ğŒvZ
 f_calcCenter(_values, _useMedian) =>
     size = array.size(_values)
     float result = na
@@ -87,7 +100,7 @@ f_calcCenter(_values, _useMedian) =>
             result := total / size
     result
 
-// æ—¢å­˜ã‚¾ãƒ¼ãƒ³ã¨ã®ãƒãƒƒãƒãƒ³ã‚°
+// Šù‘¶ƒ][ƒ“‚Æ‚Ìƒ}ƒbƒ`ƒ“ƒO
 f_findZoneIndex(_price, _type, _centers, _lows, _highs, _types) =>
     idx = -1
     centerCount = array.size(_centers)
@@ -101,8 +114,7 @@ f_findZoneIndex(_price, _type, _centers, _lows, _highs, _types) =>
             if array.get(_types, i) == _type
                 center = array.get(_centers, i)
                 padRef = math.max(math.abs(center), math.abs(_price))
-                float padding = clusterModeRelative ? padRef * clusterPercent * 0.01 : clusterAbsolute
-                padding := math.max(padding, syminfo.mintick)
+                float padding = f_clusterPadding(padRef)
                 low = array.get(_lows, i)
                 high = array.get(_highs, i)
                 lowerBound = math.min(low, high) - padding
@@ -112,7 +124,7 @@ f_findZoneIndex(_price, _type, _centers, _lows, _highs, _types) =>
                     break
     idx
 
-// æœ€å¤§ã‚¿ãƒƒãƒå›æ•°ã‚’å–å¾—
+// Å‘åƒ^ƒbƒ`‰ñ”‚ğæ“¾
 f_maxTouches(_touches) =>
     maxVal = 0
     size = array.size(_touches)
@@ -121,7 +133,7 @@ f_maxTouches(_touches) =>
             maxVal := math.max(maxVal, array.get(_touches, i))
     maxVal
 
-// ã‚¿ãƒƒãƒå›æ•°ã‹ã‚‰å¼·åº¦æ¯”ç‡ï¼ˆ0.0ã€œ1.0ï¼‰ã‚’ç®—å‡º
+// ƒ^ƒbƒ`‰ñ”‚©‚ç‹­“x”ä—¦i0.0?1.0j‚ğZo
 f_calcStrengthRatio(_touches, _minTouches, _maxTouches) =>
     ratio = 0.0
     if _touches < _minTouches
@@ -130,7 +142,7 @@ f_calcStrengthRatio(_touches, _minTouches, _maxTouches) =>
         ratio := _maxTouches <= _minTouches ? 1.0 : f_clamp((_touches - _minTouches) / (_maxTouches - _minTouches), 0.0, 1.0)
     ratio
 
-// æœ€å¼±ã‚¾ãƒ¼ãƒ³ã‚’æ¢ç´¢ï¼ˆã‚¿ãƒƒãƒå°‘ãƒ»å¤ã„é †ï¼‰
+// Åãƒ][ƒ“‚ğ’Tõiƒ^ƒbƒ`­EŒÃ‚¢‡j
 f_findWeakestIndex(_touches, _lastUpdate) =>
     size = array.size(_touches)
     idx = -1
@@ -147,7 +159,7 @@ f_findWeakestIndex(_touches, _lastUpdate) =>
                 weakestAge := age
     idx
 
-// ã‚¾ãƒ¼ãƒ³å‰Šé™¤ã¨ä»˜éšã‚ªãƒ–ã‚¸ã‚§ã‚¯ãƒˆã®æƒé™¤
+// ƒ][ƒ“íœ‚Æ•tƒIƒuƒWƒFƒNƒg‚Ì‘|œ
 f_removeZone(_idx, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
     if _idx >= 0 and _idx < array.size(_lows)
         boxRef = array.remove(_boxes, _idx)
@@ -164,7 +176,7 @@ f_removeZone(_idx, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buff
         array.remove(_lastUpdate, _idx)
         array.remove(_buffers, _idx)
 
-// æœ€å¤§å¸¯æ•°ã‚’è¶…ãˆã‚‹å ´åˆã«é–“å¼•ã
+// Å‘å‘Ñ”‚ğ’´‚¦‚éê‡‚ÉŠÔˆø‚«
 f_pruneWeakZones(_maxCount, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
     while array.size(_lows) > _maxCount
         idx = f_findWeakestIndex(_touches, _lastUpdate)
@@ -172,7 +184,7 @@ f_pruneWeakZones(_maxCount, _lows, _highs, _centers, _touches, _types, _lastUpda
             break
         f_removeZone(idx, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels)
 
-// å¤ã„ã‚¾ãƒ¼ãƒ³ã®ã‚¯ãƒªãƒ¼ãƒ³ã‚¢ãƒƒãƒ—
+// ŒÃ‚¢ƒ][ƒ“‚ÌƒNƒŠ[ƒ“ƒAƒbƒv
 f_cleanupOldZones(_maxLookback, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
     size = array.size(_lows)
     if size > 0
@@ -184,7 +196,7 @@ f_cleanupOldZones(_maxLookback, _lows, _highs, _centers, _touches, _types, _last
                 if not na(lastIdx) and bar_index - lastIdx > _maxLookback
                     f_removeZone(idx, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels)
 
-// ãƒ”ãƒœãƒƒãƒˆæ™‚åˆ»ã‹ã‚‰ãƒ¡ã‚¤ãƒ³ãƒãƒ£ãƒ¼ãƒˆã® bar_index ã‚’æ¨å®š
+// ƒsƒ{ƒbƒg‚©‚çƒƒCƒ“ƒ`ƒƒ[ƒg‚Ì bar_index ‚ğ„’è
 f_timeToBarIndex(_timeValue) =>
     idx = ta.valuewhen(time >= _timeValue, bar_index, 0)
     int out = na
@@ -192,7 +204,7 @@ f_timeToBarIndex(_timeValue) =>
         out := int(idx)
     out
 
-// ã‚¾ãƒ¼ãƒ³ã«ãƒ”ãƒœãƒƒãƒˆã‚’ç™»éŒ²ãƒ»æ›´æ–°
+// ƒ][ƒ“‚Éƒsƒ{ƒbƒg‚ğ“o˜^EXV
 f_registerPivot(_price, _type, _pivotIndex, _lows, _highs, _centers, _touches, _types, _lastUpdate, _buffers, _boxes, _labels) =>
     if na(_price)
         na
@@ -224,7 +236,7 @@ f_registerPivot(_price, _type, _pivotIndex, _lows, _highs, _centers, _touches, _
             array.push(_boxes, na)
             array.push(_labels, na)
 
-// ã‚¢ãƒ©ãƒ¼ãƒˆç”¨ï¼šç¾åœ¨ä¾¡æ ¼ãŒå¸¯ã«æ¥è¿‘ã—ã¦ã„ã‚‹ã‹åˆ¤å®š
+// ƒAƒ‰[ƒg—pFŒ»İ‰¿Ši‚ª‘Ñ‚ÉÚ‹ß‚µ‚Ä‚¢‚é‚©”»’è
 f_priceNearZones(_price, _lows, _highs, _centers, _touches, _types, _lastUpdate, _minTouches, _maxLookback, _distancePercent) =>
     result = false
     denom = math.max(math.abs(_price), syminfo.mintick)
@@ -248,7 +260,7 @@ f_priceNearZones(_price, _lows, _highs, _centers, _touches, _types, _lastUpdate,
                     break
     result
 
-//=== ã‚¾ãƒ¼ãƒ³ç®¡ç†ç”¨é…åˆ— ===
+//=== ƒ][ƒ“ŠÇ——p”z—ñ ===
 var dailyZoneLows       = array.new_float()
 var dailyZoneHighs      = array.new_float()
 var dailyZoneCenters    = array.new_float()
@@ -269,12 +281,12 @@ var h1ZoneBuffers    = array.new<ZoneBuffer>()
 var h1ZoneBoxes      = array.new_box()
 var h1ZoneLabels     = array.new_label()
 
-//=== ãƒ†ãƒ¼ãƒ–ãƒ«åˆæœŸåŒ– ===
+//=== ƒe[ƒuƒ‹‰Šú‰» ===
 var table zoneTable = table.new(position.top_right, 3, tableTopN + 1, border_width=1)
 if barstate.isfirst
-    table.cell(zoneTable, 0, 0, "ä¾¡æ ¼")
-    table.cell(zoneTable, 1, 0, "ç¨®åˆ¥")
-    table.cell(zoneTable, 2, 0, "ã‚¿ãƒƒãƒ")
+    table.cell(zoneTable, 0, 0, "‰¿Ši")
+    table.cell(zoneTable, 1, 0, "í•Ê")
+    table.cell(zoneTable, 2, 0, "ƒ^ƒbƒ`")
     table.cell_set_text_color(zoneTable, 0, 0, color.white)
     table.cell_set_text_color(zoneTable, 1, 0, color.white)
     table.cell_set_text_color(zoneTable, 2, 0, color.white)
@@ -285,7 +297,7 @@ if barstate.isfirst
     table.cell_set_text_valign(zoneTable, 1, 0, text.align_center)
     table.cell_set_text_valign(zoneTable, 2, 0, text.align_center)
 
-//=== ãƒ”ãƒœãƒƒãƒˆæ¤œå‡ºï¼ˆMTFï¼‰ ===
+//=== ƒsƒ{ƒbƒgŒŸoiMTFj ===
 var int dailyLastHighTime = na
 var int dailyLastLowTime  = na
 var int h1LastHighTime    = na
@@ -301,7 +313,7 @@ h1PivotHighTime = request.security(syminfo.tickerid, TF_H1, time[hRightBars], lo
 h1PivotLow      = request.security(syminfo.tickerid, TF_H1, ta.pivotlow(low, hLeftBars, hRightBars), lookahead=barmerge.lookahead_on)
 h1PivotLowTime  = request.security(syminfo.tickerid, TF_H1, time[hRightBars], lookahead=barmerge.lookahead_on)
 
-//=== æ—¥è¶³ãƒ”ãƒœãƒƒãƒˆç™»éŒ² ===
+//=== “ú‘«ƒsƒ{ƒbƒg“o˜^ ===
 if not na(dailyPivotHigh) and not na(dailyPivotHighTime)
     if na(dailyLastHighTime) or dailyPivotHighTime != dailyLastHighTime
         pivotIdx = f_timeToBarIndex(dailyPivotHighTime)
@@ -316,7 +328,7 @@ if not na(dailyPivotLow) and not na(dailyPivotLowTime)
             f_registerPivot(dailyPivotLow, -1, pivotIdx, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
             dailyLastLowTime := dailyPivotLowTime
 
-//=== 1æ™‚é–“è¶³ãƒ”ãƒœãƒƒãƒˆç™»éŒ² ===
+//=== 1ŠÔ‘«ƒsƒ{ƒbƒg“o˜^ ===
 if not na(h1PivotHigh) and not na(h1PivotHighTime)
     if na(h1LastHighTime) or h1PivotHighTime != h1LastHighTime
         pivotIdx = f_timeToBarIndex(h1PivotHighTime)
@@ -331,14 +343,14 @@ if not na(h1PivotLow) and not na(h1PivotLowTime)
             f_registerPivot(h1PivotLow, -1, pivotIdx, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
             h1LastLowTime := h1PivotLowTime
 
-//=== ã‚¾ãƒ¼ãƒ³ã®ãƒ¡ãƒ³ãƒ†ãƒŠãƒ³ã‚¹ ===
+//=== ƒ][ƒ“‚Ìƒƒ“ƒeƒiƒ“ƒX ===
 f_cleanupOldZones(maxLookbackBars, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
 f_pruneWeakZones(maxZonesPerTf, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, dailyZoneBuffers, dailyZoneBoxes, dailyZoneLabels)
 
 f_cleanupOldZones(maxLookbackBars, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
 f_pruneWeakZones(maxZonesPerTf, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, h1ZoneBuffers, h1ZoneBoxes, h1ZoneLabels)
 
-//=== æ—¥è¶³å¸¯ã®æç”» ===
+//=== “ú‘«‘Ñ‚Ì•`‰æ ===
 dailyMaxTouches = f_maxTouches(dailyZoneTouches)
 dailyCount = array.size(dailyZoneCenters)
 for i = 0 to math.max(dailyCount - 1, 0)
@@ -391,7 +403,7 @@ for i = 0 to math.max(dailyCount - 1, 0)
             label.set_text(zoneLabel, "")
             label.set_color(zoneLabel, color.new(dailyColor, 100))
 
-//=== 1æ™‚é–“å¸¯ã®æç”» ===
+//=== 1ŠÔ‘Ñ‚Ì•`‰æ ===
 h1MaxTouches = f_maxTouches(h1ZoneTouches)
 h1Count = array.size(h1ZoneCenters)
 for i = 0 to math.max(h1Count - 1, 0)
@@ -444,18 +456,18 @@ for i = 0 to math.max(h1Count - 1, 0)
             label.set_text(zoneLabel, "")
             label.set_color(zoneLabel, color.new(h1Color, 100))
 
-//=== ã‚¢ãƒ©ãƒ¼ãƒˆ ===
+//=== ƒAƒ‰[ƒg ===
 dailyNear = alertEnableDaily and f_priceNearZones(close, dailyZoneLows, dailyZoneHighs, dailyZoneCenters, dailyZoneTouches, dailyZoneTypes, dailyZoneLastUpdate, minTouches, maxLookbackBars, alertDistancePercent)
 h1Near    = alertEnableH1 and f_priceNearZones(close, h1ZoneLows, h1ZoneHighs, h1ZoneCenters, h1ZoneTouches, h1ZoneTypes, h1ZoneLastUpdate, minTouches, maxLookbackBars, alertDistancePercent)
 
-alertcondition(dailyNear, "Daily Zone Proximity", "ä¾¡æ ¼ãŒæ—¥è¶³ã‚¾ãƒ¼ãƒ³ã«æ¥è¿‘ã—ã¾ã—ãŸ")
-alertcondition(h1Near, "H1 Zone Proximity", "ä¾¡æ ¼ãŒ1æ™‚é–“ã‚¾ãƒ¼ãƒ³ã«æ¥è¿‘ã—ã¾ã—ãŸ")
+alertcondition(dailyNear, "Daily Zone Proximity", "‰¿Ši‚ª“ú‘«ƒ][ƒ“‚ÉÚ‹ß‚µ‚Ü‚µ‚½")
+alertcondition(h1Near, "H1 Zone Proximity", "‰¿Ši‚ª1ŠÔƒ][ƒ“‚ÉÚ‹ß‚µ‚Ü‚µ‚½")
 
-//=== ãƒ†ãƒ¼ãƒ–ãƒ«æ›´æ–° ===
+//=== ƒe[ƒuƒ‹XV ===
 if barstate.islast
-    table.cell(zoneTable, 0, 0, "ä¾¡æ ¼")
-    table.cell(zoneTable, 1, 0, "ç¨®åˆ¥")
-    table.cell(zoneTable, 2, 0, "ã‚¿ãƒƒãƒ")
+    table.cell(zoneTable, 0, 0, "‰¿Ši")
+    table.cell(zoneTable, 1, 0, "í•Ê")
+    table.cell(zoneTable, 2, 0, "ƒ^ƒbƒ`")
 
     prices     = array.new_float()
     typesList  = array.new_string()
@@ -546,7 +558,7 @@ if barstate.islast
             table.cell_set_text_valign(zoneTable, 1, row + 1, text.align_center)
             table.cell_set_text_valign(zoneTable, 2, row + 1, text.align_center)
 
-// ä½¿ã„æ–¹ãƒ¡ãƒ¢:
-// 1. ãƒ”ãƒœãƒƒãƒˆå¹…(left/right)ã¨ã‚¯ãƒ©ã‚¹ã‚¿è·é›¢ï¼ˆ% ã¾ãŸã¯ ä¾¡æ ¼ï¼‰ã‚’éŠ˜æŸ„ã«åˆã‚ã›ã¦å¾®èª¿æ•´ã—ã¦ãã ã•ã„ã€‚
-// 2. æœ€å°ã‚¿ãƒƒãƒå›æ•°ã¨æœ€å¤§å¸¯æ•°ã‚’èª¿æ•´ã™ã‚‹ã¨ã€é‡è¦ãªã‚¾ãƒ¼ãƒ³ã ã‘ãŒæŠ½å‡ºã•ã‚Œæç”»è² è·ã‚‚è»½ããªã‚Šã¾ã™ã€‚
-// 3. ã‚¢ãƒ©ãƒ¼ãƒˆã¯ã€ŒDaily Zone Proximityã€ã€ŒH1 Zone Proximityã€ã‚’æœ‰åŠ¹åŒ–ã—ã€æ¥è¿‘è·é›¢[%]ã§æ„Ÿåº¦ã‚’èª¿æ•´ã—ã¦ãã ã•ã„ã€‚
+// g‚¢•ûƒƒ‚:
+// 1. ƒsƒ{ƒbƒg•(left/right)‚ÆƒNƒ‰ƒXƒ^‹——£i% ‚Ü‚½‚Í ‰¿Šij‚ğ–Á•¿‚É‡‚í‚¹‚Ä”÷’²®‚µ‚Ä‚­‚¾‚³‚¢B
+// 2. Å¬ƒ^ƒbƒ`‰ñ”‚ÆÅ‘å‘Ñ”‚ğ’²®‚·‚é‚ÆAd—v‚Èƒ][ƒ“‚¾‚¯‚ª’Šo‚³‚ê•`‰æ•‰‰×‚àŒy‚­‚È‚è‚Ü‚·B
+// 3. ƒAƒ‰[ƒg‚ÍuDaily Zone ProximityvuH1 Zone Proximityv‚ğ—LŒø‰»‚µAÚ‹ß‹——£[%]‚ÅŠ´“x‚ğ’²®‚µ‚Ä‚­‚¾‚³‚¢B

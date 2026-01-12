@@ -34,6 +34,9 @@ tf4 = input.timeframe("240", "TF4")
 tf5 = input.timeframe("D", "TF5")
 tf6 = input.timeframe("W", "TF6")
 
+// Determine entry-line calculation timeframe: one step above the chart timeframe within the TF list
+entryCalcTf = timeframe.period == tf1 ? tf2 : timeframe.period == tf2 ? tf3 : timeframe.period == tf3 ? tf4 : timeframe.period == tf4 ? tf5 : timeframe.period == tf5 ? tf6 : tf6
+
 // Dow Theory trend calculation: +1 up, -1 down, 0 neutral
 calcTrend() =>
     var float lastHigh = na
@@ -71,6 +74,66 @@ trend_tf3 = request.security(syminfo.tickerid, tf3, calcTrend())
 trend_tf4 = request.security(syminfo.tickerid, tf4, calcTrend())
 trend_tf5 = request.security(syminfo.tickerid, tf5, calcTrend())
 trend_tf6 = request.security(syminfo.tickerid, tf6, calcTrend())
+
+// Entry line calculation on higher timeframe (two steps above)
+calcEntryLine(selector) =>
+    var float lastHigh = na
+    var float prevHigh = na
+    var float lastLow = na
+    var float prevLow = na
+    var float swingUpLowLocal = na
+    var float swingUpHighLocal = na
+    var float swingDownHighLocal = na
+    var float swingDownLowLocal = na
+    var int lastPivotDirLocal = 0
+
+    phLocal = ta.pivothigh(high, pivotLen, pivotLen)
+    plLocal = ta.pivotlow(low, pivotLen, pivotLen)
+    atrLocal = ta.atr(atrLen)
+
+    acceptHighLocal = not na(phLocal) and (not useAtrFilter or na(lastLow) or phLocal - lastLow >= minSwingAtr * atrLocal)
+    acceptLowLocal = not na(plLocal) and (not useAtrFilter or na(lastHigh) or lastHigh - plLocal >= minSwingAtr * atrLocal)
+
+    if acceptHighLocal
+        prevHigh := lastHigh
+        lastHigh := phLocal
+        if lastPivotDirLocal == -1 and not na(lastLow)
+            swingUpLowLocal := lastLow
+            swingUpHighLocal := phLocal
+        lastPivotDirLocal := 1
+
+    if acceptLowLocal
+        prevLow := lastLow
+        lastLow := plLocal
+        if lastPivotDirLocal == 1 and not na(lastHigh)
+            swingDownHighLocal := lastHigh
+            swingDownLowLocal := plLocal
+        lastPivotDirLocal := -1
+
+    trendUpLocal = not na(lastHigh) and not na(prevHigh) and not na(lastLow) and not na(prevLow) and lastHigh > prevHigh and lastLow > prevLow
+    trendDownLocal = not na(lastHigh) and not na(prevHigh) and not na(lastLow) and not na(prevLow) and lastHigh < prevHigh and lastLow < prevLow
+
+    fibUpRangeLocal = not na(swingUpHighLocal) and not na(swingUpLowLocal) ? (swingUpHighLocal - swingUpLowLocal) : na
+    fibDownRangeLocal = not na(swingDownHighLocal) and not na(swingDownLowLocal) ? (swingDownHighLocal - swingDownLowLocal) : na
+    fibUp786Local = not na(fibUpRangeLocal) ? (swingUpLowLocal + fibUpRangeLocal * 0.786) : na
+    fibUp618Local = not na(fibUpRangeLocal) ? (swingUpLowLocal + fibUpRangeLocal * 0.618) : na
+    fibDown786Local = not na(fibDownRangeLocal) ? (swingDownHighLocal - fibDownRangeLocal * 0.786) : na
+    fibDown618Local = not na(fibDownRangeLocal) ? (swingDownHighLocal - fibDownRangeLocal * 0.618) : na
+
+    selector == 0 ? fibUp786Local :
+     selector == 1 ? fibUp618Local :
+     selector == 2 ? fibDown786Local :
+     selector == 3 ? fibDown618Local :
+     selector == 4 ? (trendUpLocal ? 1.0 : 0.0) :
+     selector == 5 ? (trendDownLocal ? 1.0 : 0.0) :
+     na
+
+fibUp786HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(0))
+fibUp618HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(1))
+fibDown786HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(2))
+fibDown618HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(3))
+trendUpHTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(4)) == 1.0
+trendDownHTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(5)) == 1.0
 
 // Horizontal lines from pivot prices on the chart timeframe
 ph = ta.pivothigh(high, pivotLen, pivotLen)
@@ -159,7 +222,7 @@ fibUp618 = not na(fibUpRange) ? (swingUpLow + fibUpRange * 0.618) : na
 fibDown786 = not na(fibDownRange) ? (swingDownHigh - fibDownRange * 0.786) : na
 fibDown618 = not na(fibDownRange) ? (swingDownHigh - fibDownRange * 0.618) : na
 
-if showEntryLines and ((trendUp and not na(fibUpRange)) or (trendDown and not na(fibDownRange)))
+if showEntryLines and ((trendUpHTF and not na(fibUp786HTF)) or (trendDownHTF and not na(fibDown786HTF)))
     if not na(entryUp786)
         line.delete(entryUp786)
         entryUp786 := na
@@ -172,12 +235,12 @@ if showEntryLines and ((trendUp and not na(fibUpRange)) or (trendDown and not na
     if not na(entryDown618)
         line.delete(entryDown618)
         entryDown618 := na
-    if trendUp
-        entryUp786 := line.new(bar_index - pivotLen, fibUp786, bar_index, fibUp786, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
-        entryUp618 := line.new(bar_index - pivotLen, fibUp618, bar_index, fibUp618, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
-    if trendDown
-        entryDown786 := line.new(bar_index - pivotLen, fibDown786, bar_index, fibDown786, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
-        entryDown618 := line.new(bar_index - pivotLen, fibDown618, bar_index, fibDown618, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
+    if trendUpHTF
+        entryUp786 := line.new(bar_index - pivotLen, fibUp786HTF, bar_index, fibUp786HTF, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
+        entryUp618 := line.new(bar_index - pivotLen, fibUp618HTF, bar_index, fibUp618HTF, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
+    if trendDownHTF
+        entryDown786 := line.new(bar_index - pivotLen, fibDown786HTF, bar_index, fibDown786HTF, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
+        entryDown618 := line.new(bar_index - pivotLen, fibDown618HTF, bar_index, fibDown618HTF, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
 else if not showEntryLines
     if not na(entryUp786)
         line.delete(entryUp786)
