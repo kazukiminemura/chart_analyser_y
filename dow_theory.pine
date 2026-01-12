@@ -1,8 +1,30 @@
 //@version=5
-indicator("Dow Theory Multi-Timeframe Trend", overlay=true, max_labels_count=500)
+indicator("Dow Theory Multi-Timeframe Trend", overlay=true, max_labels_count=500, max_lines_count=500)
 
-// Pivot length for Dow Theory swing detection
-pivotLen = input.int(3, "Pivot Length", minval=1)
+// Pivot length for Dow Theory swing detection (use larger length for major pivots)
+pivotLen = input.int(8, "Pivot Length (Major)", minval=1)
+useAtrFilter = input.bool(true, "Filter Small Swings")
+atrLen = input.int(14, "ATR Length", minval=1)
+minSwingAtr = input.float(1.0, "Min Swing (ATR)", minval=0.0, step=0.1)
+showPivotLines = input.bool(true, "Draw Horizontal Lines at Pivots")
+pivotHighColor = input.color(color.new(color.green, 0), "Pivot High Line Color")
+pivotLowColor = input.color(color.new(color.red, 0), "Pivot Low Line Color")
+maxPivotLines = input.int(8, "Max Pivot Lines", minval=1, maxval=200)
+pivotLineWidth = input.int(1, "Pivot Line Width", minval=1, maxval=5)
+pivotLineStyle = input.string("Solid", "Pivot Line Style", options=["Solid", "Dashed", "Dotted"])
+showEntryLines = input.bool(true, "Draw Entry Lines (Fib 0.786/0.618)")
+entryUpColor = input.color(color.new(color.green, 0), "Entry Line Color (Up)")
+entryDownColor = input.color(color.new(color.red, 0), "Entry Line Color (Down)")
+entryLineWidth = input.int(1, "Entry Line Width", minval=1, maxval=5)
+entryLineStyle = input.string("Dashed", "Entry Line Style", options=["Solid", "Dashed", "Dotted"])
+showSwingPoints = input.bool(true, "Show Swing Start/End Points")
+swingUpColor = input.color(color.new(color.green, 0), "Swing Point Color (Up)")
+swingDownColor = input.color(color.new(color.red, 0), "Swing Point Color (Down)")
+entryLineStyleResolved = entryLineStyle == "Dashed" ? line.style_dashed : entryLineStyle == "Dotted" ? line.style_dotted : line.style_solid
+var line entryUp786 = na
+var line entryUp618 = na
+var line entryDown786 = na
+var line entryDown618 = na
 
 // Timeframes to evaluate
 tf1 = input.timeframe("5", "TF1")
@@ -21,11 +43,15 @@ calcTrend() =>
 
     ph = ta.pivothigh(high, pivotLen, pivotLen)
     pl = ta.pivotlow(low, pivotLen, pivotLen)
+    atr = ta.atr(atrLen)
 
-    if not na(ph)
+    acceptHigh = not na(ph) and (not useAtrFilter or na(lastLow) or ph - lastLow >= minSwingAtr * atr)
+    acceptLow = not na(pl) and (not useAtrFilter or na(lastHigh) or lastHigh - pl >= minSwingAtr * atr)
+
+    if acceptHigh
         prevHigh := lastHigh
         lastHigh := ph
-    if not na(pl)
+    if acceptLow
         prevLow := lastLow
         lastLow := pl
 
@@ -45,6 +71,126 @@ trend_tf3 = request.security(syminfo.tickerid, tf3, calcTrend())
 trend_tf4 = request.security(syminfo.tickerid, tf4, calcTrend())
 trend_tf5 = request.security(syminfo.tickerid, tf5, calcTrend())
 trend_tf6 = request.security(syminfo.tickerid, tf6, calcTrend())
+
+// Horizontal lines from pivot prices on the chart timeframe
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+atr = ta.atr(atrLen)
+lineStyle = pivotLineStyle == "Dashed" ? line.style_dashed : pivotLineStyle == "Dotted" ? line.style_dotted : line.style_solid
+var line[] pivotHighLines = array.new_line()
+var line[] pivotLowLines = array.new_line()
+var float lastMajorHigh = na
+var float lastMajorLow = na
+var float prevMajorHigh = na
+var float prevMajorLow = na
+var int lastMajorHighIndex = na
+var int lastMajorLowIndex = na
+var int lastPivotDir = 0
+var float swingUpLow = na
+var float swingUpHigh = na
+var float swingDownHigh = na
+var float swingDownLow = na
+var int swingUpLowIndex = na
+var int swingUpHighIndex = na
+var int swingDownHighIndex = na
+var int swingDownLowIndex = na
+var label swingUpLowLabel = na
+var label swingUpHighLabel = na
+var label swingDownHighLabel = na
+var label swingDownLowLabel = na
+addPivotLine(line[] store, float price, color lineColor) =>
+    if array.size(store) >= maxPivotLines
+        old = array.shift(store)
+        if not na(old)
+            line.delete(old)
+    nl = line.new(bar_index - pivotLen, price, bar_index, price, extend=extend.right, color=lineColor, width=pivotLineWidth, style=lineStyle)
+    array.push(store, nl)
+
+acceptHigh = not na(ph) and (not useAtrFilter or na(lastMajorLow) or ph - lastMajorLow >= minSwingAtr * atr)
+acceptLow = not na(pl) and (not useAtrFilter or na(lastMajorHigh) or lastMajorHigh - pl >= minSwingAtr * atr)
+
+if acceptHigh
+    prevMajorHigh := lastMajorHigh
+    lastMajorHigh := ph
+    lastMajorHighIndex := bar_index - pivotLen
+    if lastPivotDir == -1 and not na(lastMajorLow)
+        swingUpLow := lastMajorLow
+        swingUpHigh := ph
+        swingUpLowIndex := lastMajorLowIndex
+        swingUpHighIndex := lastMajorHighIndex
+        if showSwingPoints
+            if not na(swingUpLowLabel)
+                label.delete(swingUpLowLabel)
+            if not na(swingUpHighLabel)
+                label.delete(swingUpHighLabel)
+            swingUpLowLabel := label.new(swingUpLowIndex, swingUpLow, "Up Low", style=label.style_label_up, textcolor=color.white, color=swingUpColor, size=size.tiny)
+            swingUpHighLabel := label.new(swingUpHighIndex, swingUpHigh, "Up High", style=label.style_label_down, textcolor=color.white, color=swingUpColor, size=size.tiny)
+    lastPivotDir := 1
+    if showPivotLines
+        addPivotLine(pivotHighLines, ph, pivotHighColor)
+if acceptLow
+    prevMajorLow := lastMajorLow
+    lastMajorLow := pl
+    lastMajorLowIndex := bar_index - pivotLen
+    if lastPivotDir == 1 and not na(lastMajorHigh)
+        swingDownHigh := lastMajorHigh
+        swingDownLow := pl
+        swingDownHighIndex := lastMajorHighIndex
+        swingDownLowIndex := lastMajorLowIndex
+        if showSwingPoints
+            if not na(swingDownHighLabel)
+                label.delete(swingDownHighLabel)
+            if not na(swingDownLowLabel)
+                label.delete(swingDownLowLabel)
+            swingDownHighLabel := label.new(swingDownHighIndex, swingDownHigh, "Down High", style=label.style_label_down, textcolor=color.white, color=swingDownColor, size=size.tiny)
+            swingDownLowLabel := label.new(swingDownLowIndex, swingDownLow, "Down Low", style=label.style_label_up, textcolor=color.white, color=swingDownColor, size=size.tiny)
+    lastPivotDir := -1
+    if showPivotLines
+        addPivotLine(pivotLowLines, pl, pivotLowColor)
+
+// Entry lines at Fib 0.786 / 0.618 based on current major trend
+trendUp = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh > prevMajorHigh and lastMajorLow > prevMajorLow
+trendDown = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh < prevMajorHigh and lastMajorLow < prevMajorLow
+
+fibUpRange = not na(swingUpHigh) and not na(swingUpLow) ? (swingUpHigh - swingUpLow) : na
+fibDownRange = not na(swingDownHigh) and not na(swingDownLow) ? (swingDownHigh - swingDownLow) : na
+fibUp786 = not na(fibUpRange) ? (swingUpLow + fibUpRange * 0.786) : na
+fibUp618 = not na(fibUpRange) ? (swingUpLow + fibUpRange * 0.618) : na
+fibDown786 = not na(fibDownRange) ? (swingDownHigh - fibDownRange * 0.786) : na
+fibDown618 = not na(fibDownRange) ? (swingDownHigh - fibDownRange * 0.618) : na
+
+if showEntryLines and ((trendUp and not na(fibUpRange)) or (trendDown and not na(fibDownRange)))
+    if not na(entryUp786)
+        line.delete(entryUp786)
+        entryUp786 := na
+    if not na(entryUp618)
+        line.delete(entryUp618)
+        entryUp618 := na
+    if not na(entryDown786)
+        line.delete(entryDown786)
+        entryDown786 := na
+    if not na(entryDown618)
+        line.delete(entryDown618)
+        entryDown618 := na
+    if trendUp
+        entryUp786 := line.new(bar_index - pivotLen, fibUp786, bar_index, fibUp786, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
+        entryUp618 := line.new(bar_index - pivotLen, fibUp618, bar_index, fibUp618, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
+    if trendDown
+        entryDown786 := line.new(bar_index - pivotLen, fibDown786, bar_index, fibDown786, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
+        entryDown618 := line.new(bar_index - pivotLen, fibDown618, bar_index, fibDown618, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
+else if not showEntryLines
+    if not na(entryUp786)
+        line.delete(entryUp786)
+        entryUp786 := na
+    if not na(entryUp618)
+        line.delete(entryUp618)
+        entryUp618 := na
+    if not na(entryDown786)
+        line.delete(entryDown786)
+        entryDown786 := na
+    if not na(entryDown618)
+        line.delete(entryDown618)
+        entryDown618 := na
 
 // Table UI
 var table t = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 80))
