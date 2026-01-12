@@ -12,19 +12,18 @@ pivotLowColor = input.color(color.new(color.red, 0), "Pivot Low Line Color")
 maxPivotLines = input.int(8, "Max Pivot Lines", minval=1, maxval=200)
 pivotLineWidth = input.int(1, "Pivot Line Width", minval=1, maxval=5)
 pivotLineStyle = input.string("Solid", "Pivot Line Style", options=["Solid", "Dashed", "Dotted"])
-showEntryLines = input.bool(true, "Draw Entry Lines (Fib 0.786/0.618)")
-entryUpColor = input.color(color.new(color.green, 0), "Entry Line Color (Up)")
-entryDownColor = input.color(color.new(color.red, 0), "Entry Line Color (Down)")
-entryLineWidth = input.int(1, "Entry Line Width", minval=1, maxval=5)
-entryLineStyle = input.string("Dashed", "Entry Line Style", options=["Solid", "Dashed", "Dotted"])
 showSwingPoints = input.bool(true, "Show Swing Start/End Points")
 swingUpColor = input.color(color.new(color.green, 0), "Swing Point Color (Up)")
 swingDownColor = input.color(color.new(color.red, 0), "Swing Point Color (Down)")
-entryLineStyleResolved = entryLineStyle == "Dashed" ? line.style_dashed : entryLineStyle == "Dotted" ? line.style_dotted : line.style_solid
-var line entryUp786 = na
-var line entryUp618 = na
-var line entryDown786 = na
-var line entryDown618 = na
+showPaMarks = input.bool(true, "Show Yosuga PA Marks (Provisional)")
+paLongUpperWick = input.bool(true, "PA: Long Upper Wick")
+paWickBodyRatio = input.float(2.0, "Upper Wick >= Body x", minval=0.1, step=0.1)
+paLongLowerWick = input.bool(true, "PA: Long Lower Wick")
+paLowerWickBodyRatio = input.float(2.0, "Lower Wick >= Body x", minval=0.1, step=0.1)
+paRequireLine = input.bool(true, "PA: Require Clear Line (Pivot High/Low)")
+paLineAtrTolerance = input.float(0.3, "PA: Line Proximity (ATR)", minval=0.0, step=0.1)
+paRequireFlow = input.bool(true, "PA: Require Prior Flow")
+paRequireFollow = input.bool(true, "PA: Require Next-Bar Follow-Through")
 
 // Timeframes to evaluate
 tf1 = input.timeframe("5", "TF1")
@@ -33,9 +32,7 @@ tf3 = input.timeframe("60", "TF3")
 tf4 = input.timeframe("240", "TF4")
 tf5 = input.timeframe("D", "TF5")
 tf6 = input.timeframe("W", "TF6")
-
-// Determine entry-line calculation timeframe: one step above the chart timeframe within the TF list
-entryCalcTf = timeframe.period == tf1 ? tf2 : timeframe.period == tf2 ? tf3 : timeframe.period == tf3 ? tf4 : timeframe.period == tf4 ? tf5 : timeframe.period == tf5 ? tf6 : tf6
+lockTf2PerDay = input.bool(true, "Lock TF2 Trend Per Day (on TF2 chart)")
 
 // Dow Theory trend calculation: +1 up, -1 down, 0 neutral
 calcTrend() =>
@@ -75,65 +72,17 @@ trend_tf4 = request.security(syminfo.tickerid, tf4, calcTrend())
 trend_tf5 = request.security(syminfo.tickerid, tf5, calcTrend())
 trend_tf6 = request.security(syminfo.tickerid, tf6, calcTrend())
 
-// Entry line calculation on higher timeframe (two steps above)
-calcEntryLine(selector) =>
-    var float lastHigh = na
-    var float prevHigh = na
-    var float lastLow = na
-    var float prevLow = na
-    var float swingUpLowLocal = na
-    var float swingUpHighLocal = na
-    var float swingDownHighLocal = na
-    var float swingDownLowLocal = na
-    var int lastPivotDirLocal = 0
-
-    phLocal = ta.pivothigh(high, pivotLen, pivotLen)
-    plLocal = ta.pivotlow(low, pivotLen, pivotLen)
-    atrLocal = ta.atr(atrLen)
-
-    acceptHighLocal = not na(phLocal) and (not useAtrFilter or na(lastLow) or phLocal - lastLow >= minSwingAtr * atrLocal)
-    acceptLowLocal = not na(plLocal) and (not useAtrFilter or na(lastHigh) or lastHigh - plLocal >= minSwingAtr * atrLocal)
-
-    if acceptHighLocal
-        prevHigh := lastHigh
-        lastHigh := phLocal
-        if lastPivotDirLocal == -1 and not na(lastLow)
-            swingUpLowLocal := lastLow
-            swingUpHighLocal := phLocal
-        lastPivotDirLocal := 1
-
-    if acceptLowLocal
-        prevLow := lastLow
-        lastLow := plLocal
-        if lastPivotDirLocal == 1 and not na(lastHigh)
-            swingDownHighLocal := lastHigh
-            swingDownLowLocal := plLocal
-        lastPivotDirLocal := -1
-
-    trendUpLocal = not na(lastHigh) and not na(prevHigh) and not na(lastLow) and not na(prevLow) and lastHigh > prevHigh and lastLow > prevLow
-    trendDownLocal = not na(lastHigh) and not na(prevHigh) and not na(lastLow) and not na(prevLow) and lastHigh < prevHigh and lastLow < prevLow
-
-    fibUpRangeLocal = not na(swingUpHighLocal) and not na(swingUpLowLocal) ? (swingUpHighLocal - swingUpLowLocal) : na
-    fibDownRangeLocal = not na(swingDownHighLocal) and not na(swingDownLowLocal) ? (swingDownHighLocal - swingDownLowLocal) : na
-    fibUp786Local = not na(fibUpRangeLocal) ? (swingUpLowLocal + fibUpRangeLocal * 0.786) : na
-    fibUp618Local = not na(fibUpRangeLocal) ? (swingUpLowLocal + fibUpRangeLocal * 0.618) : na
-    fibDown786Local = not na(fibDownRangeLocal) ? (swingDownHighLocal - fibDownRangeLocal * 0.786) : na
-    fibDown618Local = not na(fibDownRangeLocal) ? (swingDownHighLocal - fibDownRangeLocal * 0.618) : na
-
-    selector == 0 ? fibUp786Local :
-     selector == 1 ? fibUp618Local :
-     selector == 2 ? fibDown786Local :
-     selector == 3 ? fibDown618Local :
-     selector == 4 ? (trendUpLocal ? 1.0 : 0.0) :
-     selector == 5 ? (trendDownLocal ? 1.0 : 0.0) :
-     na
-
-fibUp786HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(0))
-fibUp618HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(1))
-fibDown786HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(2))
-fibDown618HTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(3))
-trendUpHTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(4)) == 1.0
-trendDownHTF = request.security(syminfo.tickerid, entryCalcTf, calcEntryLine(5)) == 1.0
+dayStamp = time("D")
+lockTf2Now = lockTf2PerDay and timeframe.isintraday and timeframe.period == tf2
+var int lastLockDay = na
+var float trend_tf2_locked = na
+if lockTf2Now
+    if na(lastLockDay) or dayStamp != lastLockDay
+        lastLockDay := dayStamp
+        trend_tf2_locked := trend_tf2
+else
+    trend_tf2_locked := trend_tf2
+trend_tf2_display = lockTf2Now ? trend_tf2_locked : trend_tf2
 
 // Horizontal lines from pivot prices on the chart timeframe
 ph = ta.pivothigh(high, pivotLen, pivotLen)
@@ -211,49 +160,31 @@ if acceptLow
     if showPivotLines
         addPivotLine(pivotLowLines, pl, pivotLowColor)
 
-// Entry lines at Fib 0.786 / 0.618 based on current major trend
+// Yosuga-style PA (provisional) on signal-confirm bars
 trendUp = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh > prevMajorHigh and lastMajorLow > prevMajorLow
 trendDown = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh < prevMajorHigh and lastMajorLow < prevMajorLow
 
-fibUpRange = not na(swingUpHigh) and not na(swingUpLow) ? (swingUpHigh - swingUpLow) : na
-fibDownRange = not na(swingDownHigh) and not na(swingDownLow) ? (swingDownHigh - swingDownLow) : na
-fibUp786 = not na(fibUpRange) ? (swingUpLow + fibUpRange * 0.786) : na
-fibUp618 = not na(fibUpRange) ? (swingUpLow + fibUpRange * 0.618) : na
-fibDown786 = not na(fibDownRange) ? (swingDownHigh - fibDownRange * 0.786) : na
-fibDown618 = not na(fibDownRange) ? (swingDownHigh - fibDownRange * 0.618) : na
+bodyPrev = math.abs(close[1] - open[1])
+upperWickPrev = high[1] - math.max(open[1], close[1])
+lowerWickPrev = math.min(open[1], close[1]) - low[1]
+longUpperWickPrev = paLongUpperWick and bodyPrev > 0 and upperWickPrev >= bodyPrev * paWickBodyRatio
+longLowerWickPrev = paLongLowerWick and bodyPrev > 0 and lowerWickPrev >= bodyPrev * paLowerWickBodyRatio
 
-if showEntryLines and ((trendUpHTF and not na(fibUp786HTF)) or (trendDownHTF and not na(fibDown786HTF)))
-    if not na(entryUp786)
-        line.delete(entryUp786)
-        entryUp786 := na
-    if not na(entryUp618)
-        line.delete(entryUp618)
-        entryUp618 := na
-    if not na(entryDown786)
-        line.delete(entryDown786)
-        entryDown786 := na
-    if not na(entryDown618)
-        line.delete(entryDown618)
-        entryDown618 := na
-    if trendUpHTF
-        entryUp786 := line.new(bar_index - pivotLen, fibUp786HTF, bar_index, fibUp786HTF, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
-        entryUp618 := line.new(bar_index - pivotLen, fibUp618HTF, bar_index, fibUp618HTF, extend=extend.right, color=entryUpColor, width=entryLineWidth, style=entryLineStyleResolved)
-    if trendDownHTF
-        entryDown786 := line.new(bar_index - pivotLen, fibDown786HTF, bar_index, fibDown786HTF, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
-        entryDown618 := line.new(bar_index - pivotLen, fibDown618HTF, bar_index, fibDown618HTF, extend=extend.right, color=entryDownColor, width=entryLineWidth, style=entryLineStyleResolved)
-else if not showEntryLines
-    if not na(entryUp786)
-        line.delete(entryUp786)
-        entryUp786 := na
-    if not na(entryUp618)
-        line.delete(entryUp618)
-        entryUp618 := na
-    if not na(entryDown786)
-        line.delete(entryDown786)
-        entryDown786 := na
-    if not na(entryDown618)
-        line.delete(entryDown618)
-        entryDown618 := na
+nearHighLevel = not paRequireLine or ((not na(lastMajorHigh) and math.abs(high[1] - lastMajorHigh) <= atr * paLineAtrTolerance) or (not na(prevMajorHigh) and math.abs(high[1] - prevMajorHigh) <= atr * paLineAtrTolerance) or (not na(swingUpHigh) and math.abs(high[1] - swingUpHigh) <= atr * paLineAtrTolerance))
+nearLowLevel = not paRequireLine or ((not na(lastMajorLow) and math.abs(low[1] - lastMajorLow) <= atr * paLineAtrTolerance) or (not na(prevMajorLow) and math.abs(low[1] - prevMajorLow) <= atr * paLineAtrTolerance) or (not na(swingDownLow) and math.abs(low[1] - swingDownLow) <= atr * paLineAtrTolerance))
+
+flowOkDown = not paRequireFlow or (trendUp or lastPivotDir == 1)
+flowOkUp = not paRequireFlow or (trendDown or lastPivotDir == -1)
+
+followDown = not paRequireFollow or (close < close[1] and close < open)
+followUp = not paRequireFollow or (close > close[1] and close > open)
+
+paDown = showPaMarks and longUpperWickPrev and nearHighLevel and flowOkDown and followDown
+paUp = showPaMarks and longLowerWickPrev and nearLowLevel and flowOkUp and followUp
+plotshape(paDown, title="Yosuga PA Mark Down", style=shape.labeldown, location=location.abovebar,
+  color=color.new(color.red, 0), text="PA", textcolor=color.white, size=size.tiny)
+plotshape(paUp, title="Yosuga PA Mark Up", style=shape.labelup, location=location.belowbar,
+  color=color.new(color.green, 0), text="PA", textcolor=color.white, size=size.tiny)
 
 // Table UI
 var table t = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 80))
@@ -265,7 +196,7 @@ if barstate.islast
     table.cell(t, 1, 1, trendLabel(trend_tf1), text_color=color.white, bgcolor=trendColor(trend_tf1))
 
     table.cell(t, 0, 2, tf2, text_color=color.white)
-    table.cell(t, 1, 2, trendLabel(trend_tf2), text_color=color.white, bgcolor=trendColor(trend_tf2))
+    table.cell(t, 1, 2, trendLabel(trend_tf2_display), text_color=color.white, bgcolor=trendColor(trend_tf2_display))
 
     table.cell(t, 0, 3, tf3, text_color=color.white)
     table.cell(t, 1, 3, trendLabel(trend_tf3), text_color=color.white, bgcolor=trendColor(trend_tf3))
