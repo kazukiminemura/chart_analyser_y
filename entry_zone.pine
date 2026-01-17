@@ -1,0 +1,318 @@
+//@version=5
+indicator("Trend Entry Zone", overlay=true, max_lines_count=200, max_boxes_count=10, max_labels_count=50)
+
+pivotLen = input.int(6, "Pivot Length", minval=1)
+useAtrFilter = input.bool(false, "Filter Small Swings")
+atrLen = input.int(14, "ATR Length", minval=1)
+minSwingAtr = input.float(0.5, "Min Swing (ATR)", minval=0.0, step=0.1)
+trendTf = "60"
+zoneRatio1 = input.float(0.5, "Zone Ratio 1", minval=0.0, maxval=1.0, step=0.01)
+zoneRatio2 = input.float(0.618, "Zone Ratio 2", minval=0.0, maxval=1.0, step=0.01)
+showZone = input.bool(true, "Show Entry Zone")
+zoneLineWidth = input.int(2, "Zone Line Width", minval=1, maxval=5)
+historyZones = input.int(300, "History Zones", minval=1, maxval=1000)
+showLineLabels = input.bool(true, "Show Line Basis Labels")
+upZoneColor = input.color(color.new(color.green, 0), "Up Zone Color")
+downZoneColor = input.color(color.new(color.red, 0), "Down Zone Color")
+sideZoneColor = input.color(color.new(color.white, 0), "Side Zone Color")
+zoneLineStyle = line.style_dashed
+showWinrate = input.bool(true, "Show Win Rate")
+firstWaveOnly = input.bool(false, "First Wave Only")
+entryCandleMode = input.string("Directional", "Entry Candle Filter", options=["Reversal", "Directional", "Any"])
+pipMult = input.float(10.0, "Pip Size (x Mintick)", minval=1.0, step=0.1)
+channelLen = input.int(120, "Channel Length", minval=2)
+channelMult = input.float(2.0, "Channel Width (stdev)", minval=0.1, step=0.1)
+channelTf = input.timeframe("240", "Channel Timeframe")
+useChannelFilter = input.bool(true, "Trade With Channel Direction")
+
+float pipSize = syminfo.mintick * pipMult
+
+f_trend_state() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+    atr = ta.atr(atrLen)
+
+    var float lastMajorHigh = na
+    var float prevMajorHigh = na
+    var float lastMajorLow = na
+    var float prevMajorLow = na
+    var int lastPivotDir = 0
+
+    var float swingUpLow = na
+    var float swingUpHigh = na
+    var float swingDownHigh = na
+    var float swingDownLow = na
+
+    acceptHigh = not na(ph) and (not useAtrFilter or na(lastMajorLow) or ph - lastMajorLow >= minSwingAtr * atr)
+    acceptLow = not na(pl) and (not useAtrFilter or na(lastMajorHigh) or lastMajorHigh - pl >= minSwingAtr * atr)
+
+    if acceptHigh
+        prevMajorHigh := lastMajorHigh
+        lastMajorHigh := ph
+        if lastPivotDir == -1 and not na(lastMajorLow)
+            swingUpLow := lastMajorLow
+            swingUpHigh := ph
+        lastPivotDir := 1
+
+    if acceptLow
+        prevMajorLow := lastMajorLow
+        lastMajorLow := pl
+        if lastPivotDir == 1 and not na(lastMajorHigh)
+            swingDownHigh := lastMajorHigh
+            swingDownLow := pl
+        lastPivotDir := -1
+
+    trendUp = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh > prevMajorHigh and lastMajorLow > prevMajorLow
+    trendDown = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh < prevMajorHigh and lastMajorLow < prevMajorLow
+
+    [swingUpLow, swingUpHigh, swingDownHigh, swingDownLow, trendUp, trendDown]
+
+[tfSwingUpLow, tfSwingUpHigh, tfSwingDownHigh, tfSwingDownLow, tfTrendUp, tfTrendDown] = request.security(syminfo.tickerid, trendTf, f_trend_state(), barmerge.gaps_off, barmerge.lookahead_off)
+bool trendAgreeLong = tfTrendUp
+bool trendAgreeShort = tfTrendDown
+
+f_channel() =>
+    float basis = ta.linreg(close, channelLen, 0)
+    float dev = ta.stdev(close, channelLen) * channelMult
+    float upper = basis + dev
+    float lower = basis - dev
+    float slope = basis - basis[1]
+    [basis, upper, lower, slope]
+
+[chBasis, chUpper, chLower, chSlope] = request.security(syminfo.tickerid, channelTf, f_channel(), barmerge.gaps_off, barmerge.lookahead_off)
+int channelDir = chSlope > 0 ? 1 : chSlope < 0 ? -1 : 0
+bool channelLongOk = not useChannelFilter or channelDir == 1
+bool channelShortOk = not useChannelFilter or channelDir == -1
+
+
+lowRatio = math.min(zoneRatio1, zoneRatio2)
+highRatio = math.max(zoneRatio1, zoneRatio2)
+
+var line zoneTopLine = na
+var line zoneBottomLine = na
+var int zoneStartTime = na
+var int zoneEndTime = na
+var float lastZoneTop = na
+var float lastZoneBottom = na
+var line[] zoneHistory = array.new_line()
+var label zoneTopLabel = na
+var label zoneBottomLabel = na
+var label[] zoneLabelHistory = array.new_label()
+dayMs = 24 * 60 * 60 * 1000
+
+float zoneTopSeries = na
+float zoneBottomSeries = na
+int trendDir = tfTrendUp ? 1 : tfTrendDown ? -1 : 0
+
+var int trendDirPrev = 0
+var int waveCount = 0
+var float firstWaveUpLow = na
+var float firstWaveUpHigh = na
+var float firstWaveDownHigh = na
+var float firstWaveDownLow = na
+var float lastSwingUpLow = na
+var float lastSwingUpHigh = na
+var float lastSwingDownHigh = na
+var float lastSwingDownLow = na
+
+bool trendChanged = trendDir != trendDirPrev
+if trendChanged
+    waveCount := 0
+    firstWaveUpLow := na
+    firstWaveUpHigh := na
+    firstWaveDownHigh := na
+    firstWaveDownLow := na
+    lastSwingUpLow := na
+    lastSwingUpHigh := na
+    lastSwingDownHigh := na
+    lastSwingDownLow := na
+    trendDirPrev := trendDir
+
+bool newUpSwing = trendDir == 1 and not na(tfSwingUpLow) and not na(tfSwingUpHigh) and (tfSwingUpLow != lastSwingUpLow or tfSwingUpHigh != lastSwingUpHigh)
+bool newDownSwing = trendDir == -1 and not na(tfSwingDownHigh) and not na(tfSwingDownLow) and (tfSwingDownHigh != lastSwingDownHigh or tfSwingDownLow != lastSwingDownLow)
+
+if newUpSwing
+    lastSwingUpLow := tfSwingUpLow
+    lastSwingUpHigh := tfSwingUpHigh
+    waveCount += 1
+    if waveCount == 1
+        firstWaveUpLow := tfSwingUpLow
+        firstWaveUpHigh := tfSwingUpHigh
+
+if newDownSwing
+    lastSwingDownHigh := tfSwingDownHigh
+    lastSwingDownLow := tfSwingDownLow
+    waveCount += 1
+    if waveCount == 1
+        firstWaveDownHigh := tfSwingDownHigh
+        firstWaveDownLow := tfSwingDownLow
+
+float swingLow = na
+float swingHigh = na
+if trendDir == 1
+    swingLow := firstWaveOnly and not na(firstWaveUpLow) and not na(firstWaveUpHigh) ? firstWaveUpLow : tfSwingUpLow
+    swingHigh := firstWaveOnly and not na(firstWaveUpLow) and not na(firstWaveUpHigh) ? firstWaveUpHigh : tfSwingUpHigh
+else if trendDir == -1
+    swingHigh := firstWaveOnly and not na(firstWaveDownHigh) and not na(firstWaveDownLow) ? firstWaveDownHigh : tfSwingDownHigh
+    swingLow := firstWaveOnly and not na(firstWaveDownHigh) and not na(firstWaveDownLow) ? firstWaveDownLow : tfSwingDownLow
+
+
+if tfTrendUp and not na(swingLow) and not na(swingHigh)
+    swingRange = swingHigh - swingLow
+    zoneTopSeries := swingHigh - swingRange * lowRatio
+    zoneBottomSeries := swingHigh - swingRange * highRatio
+else if tfTrendDown and not na(swingHigh) and not na(swingLow)
+    swingRange = swingHigh - swingLow
+    zoneTopSeries := swingLow + swingRange * lowRatio
+    zoneBottomSeries := swingLow + swingRange * highRatio
+
+if not na(zoneTopSeries) and not na(zoneBottomSeries)
+    zoneTopSeries := math.abs(zoneTopSeries)
+    zoneBottomSeries := math.abs(zoneBottomSeries)
+
+if barstate.islast
+    if not na(zoneTopLine)
+        line.delete(zoneTopLine)
+    if not na(zoneBottomLine)
+        line.delete(zoneBottomLine)
+    if not na(zoneTopLabel)
+        label.delete(zoneTopLabel)
+    if not na(zoneBottomLabel)
+        label.delete(zoneBottomLabel)
+    if showZone
+        float zoneTop = na
+        float zoneBottom = na
+
+        zoneTop := zoneTopSeries
+        zoneBottom := zoneBottomSeries
+
+        if not na(zoneTop) and not na(zoneBottom)
+            color zoneColor = trendDir == 1 ? upZoneColor : trendDir == -1 ? downZoneColor : sideZoneColor
+            zoneStartTime := time[1]
+            zoneEndTime := time
+            zoneTopLine := line.new(zoneStartTime, zoneTop, zoneEndTime, zoneTop, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+            zoneBottomLine := line.new(zoneStartTime, zoneBottom, zoneEndTime, zoneBottom, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+            if showLineLabels
+                string dirNow = trendDir == 1 ? "Up" : trendDir == -1 ? "Down" : "Side"
+                zoneTopLabel := label.new(zoneStartTime, zoneTop, str.format("{0} {1} Top (r={2})", trendTf, dirNow, lowRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                zoneBottomLabel := label.new(zoneStartTime, zoneBottom, str.format("{0} {1} Bot (r={2})", trendTf, dirNow, highRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+            lastZoneTop := zoneTop
+            lastZoneBottom := zoneBottom
+
+if barstate.isconfirmed
+    float zoneTopHist = zoneTopSeries
+    float zoneBottomHist = zoneBottomSeries
+
+    if not na(zoneTopHist) and not na(zoneBottomHist)
+        bool changed = na(lastZoneTop) or na(lastZoneBottom) or zoneTopHist != lastZoneTop or zoneBottomHist != lastZoneBottom
+        if changed
+            color zoneColor = trendDir == 1 ? upZoneColor : trendDir == -1 ? downZoneColor : sideZoneColor
+            int x1 = time
+            int x2 = time + dayMs
+            line l1 = line.new(x1, zoneTopHist, x2, zoneTopHist, xloc=xloc.bar_time, extend=extend.none, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+            line l2 = line.new(x1, zoneBottomHist, x2, zoneBottomHist, xloc=xloc.bar_time, extend=extend.none, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+            array.push(zoneHistory, l1)
+            array.push(zoneHistory, l2)
+            if showLineLabels
+                string dirHist = trendDir == 1 ? "Up" : trendDir == -1 ? "Down" : "Side"
+                label lt = label.new(x1, zoneTopHist, str.format("{0} {1} Top (r={2})", trendTf, dirHist, lowRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                label lb = label.new(x1, zoneBottomHist, str.format("{0} {1} Bot (r={2})", trendTf, dirHist, highRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                array.push(zoneLabelHistory, lt)
+                array.push(zoneLabelHistory, lb)
+            lastZoneTop := zoneTopHist
+            lastZoneBottom := zoneBottomHist
+            while array.size(zoneHistory) > historyZones * 2
+                line old = array.shift(zoneHistory)
+                if not na(old)
+                    line.delete(old)
+            while array.size(zoneLabelHistory) > historyZones * 2
+                label oldLabel = array.shift(zoneLabelHistory)
+                if not na(oldLabel)
+                    label.delete(oldLabel)
+
+// --- Win rate simulation ---
+float zoneHigh = not na(zoneTopSeries) and not na(zoneBottomSeries) ? math.max(zoneTopSeries, zoneBottomSeries) : na
+float zoneLow = not na(zoneTopSeries) and not na(zoneBottomSeries) ? math.min(zoneTopSeries, zoneBottomSeries) : na
+bool inZone = not na(zoneHigh) and not na(zoneLow) and close <= zoneHigh and close >= zoneLow
+bool firstWaveOk = not firstWaveOnly or (waveCount == 1 and trendDir != 0)
+
+bool bullish = close > open
+bool bearish = close < open
+bool reversalUp = bullish and close[1] < open[1]
+bool reversalDown = bearish and close[1] > open[1]
+bool longCandleOk = entryCandleMode == "Reversal" ? reversalUp : entryCandleMode == "Directional" ? bullish : true
+bool shortCandleOk = entryCandleMode == "Reversal" ? reversalDown : entryCandleMode == "Directional" ? bearish : true
+
+bool longSignal = firstWaveOk and trendDir == 1 and trendAgreeLong and inZone and longCandleOk and channelLongOk and not na(swingHigh) and not na(swingLow)
+bool shortSignal = firstWaveOk and trendDir == -1 and trendAgreeShort and inZone and shortCandleOk and channelShortOk and not na(swingHigh) and not na(swingLow)
+
+var bool inTrade = false
+var int tradeDir = 0
+var float tradeTp = na
+var float tradeSl = na
+var int tradeEntryTime = na
+var float tradeEntryPrice = na
+var line tradeArrow = na
+var int wins = 0
+var int losses = 0
+var float lastTradePips = na
+var float totalTradePips = 0.0
+var int totalTrades = 0
+
+if not inTrade
+    if longSignal
+        inTrade := true
+        tradeDir := 1
+        tradeEntryTime := time
+        tradeEntryPrice := close
+        float riskDist = math.abs(tradeEntryPrice - swingLow)
+        tradeSl := tradeEntryPrice - riskDist
+        tradeTp := tradeEntryPrice + riskDist
+    else if shortSignal
+        inTrade := true
+        tradeDir := -1
+        tradeEntryTime := time
+        tradeEntryPrice := close
+        float riskDist = math.abs(tradeEntryPrice - swingHigh)
+        tradeSl := tradeEntryPrice + riskDist
+        tradeTp := tradeEntryPrice - riskDist
+
+if inTrade
+    bool slHit = tradeDir == 1 ? low <= tradeSl : high >= tradeSl
+    bool tpHit = tradeDir == 1 ? high >= tradeTp : low <= tradeTp
+    if slHit or tpHit
+        int exitTime = time
+        float exitPrice = slHit and tpHit ? (tradeDir == 1 ? tradeSl : tradeSl) : (tpHit ? tradeTp : tradeSl)
+        if not na(tradeEntryTime) and not na(tradeEntryPrice)
+            tradeArrow := line.new(tradeEntryTime, tradeEntryPrice, exitTime, exitPrice, xloc=xloc.bar_time, extend=extend.none, color=tradeDir == 1 ? upZoneColor : downZoneColor, width=2, style=line.style_arrow_right)
+            float pl = tradeDir == 1 ? (exitPrice - tradeEntryPrice) : (tradeEntryPrice - exitPrice)
+            float pips = pipSize > 0 ? pl / pipSize : na
+            lastTradePips := pips
+            if not na(pips)
+                totalTradePips += pips
+                totalTrades += 1
+        if slHit and tpHit
+            losses += 1
+        else if tpHit
+            wins += 1
+        else
+            losses += 1
+        inTrade := false
+        tradeDir := 0
+        tradeTp := na
+        tradeSl := na
+        tradeEntryTime := na
+        tradeEntryPrice := na
+
+// --- Stats table ---
+var table stats = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80))
+if barstate.islast and showWinrate
+    int total = wins + losses
+    float winrate = total > 0 ? wins * 100.0 / total : na
+    table.cell(stats, 0, 0, "Win Rate", text_color=color.white)
+    table.cell(stats, 1, 0, total > 0 ? str.format("{0,number,#.##}%", winrate) : "N/A", text_color=color.white)
+    table.cell(stats, 0, 1, "W/L", text_color=color.white)
+    table.cell(stats, 1, 1, str.format("{0}/{1}", wins, losses), text_color=color.white)
+    float avgPips = totalTrades > 0 ? totalTradePips / totalTrades : na
+    table.cell(stats, 0, 2, "Pips (Last/Avg)", text_color=color.white)
+    table.cell(stats, 1, 2, (not na(lastTradePips) ? str.format("{0,number,#.##}", lastTradePips) : "N/A") + "/" + (not na(avgPips) ? str.format("{0,number,#.##}", avgPips) : "N/A"), text_color=color.white)
