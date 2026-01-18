@@ -15,31 +15,6 @@ pivotLineStyle = input.string("Solid", "Pivot Line Style", options=["Solid", "Da
 showSwingPoints = input.bool(true, "Show Swing Start/End Points")
 swingUpColor = input.color(color.new(color.green, 0), "Swing Point Color (Up)")
 swingDownColor = input.color(color.new(color.red, 0), "Swing Point Color (Down)")
-showPaMarks = input.bool(true, "Show Yosuga PA Marks (Provisional)")
-paLongUpperWick = input.bool(true, "PA: Long Upper Wick")
-paWickBodyRatio = input.float(2.0, "Upper Wick >= Body x", minval=0.1, step=0.1)
-paLongLowerWick = input.bool(true, "PA: Long Lower Wick")
-paLowerWickBodyRatio = input.float(2.0, "Lower Wick >= Body x", minval=0.1, step=0.1)
-paOppWickBodyMax = input.float(0.3, "Opposite Wick <= Body x", minval=0.0, step=0.1)
-paRequireLine = input.bool(true, "PA: Require Clear Line (Pivot High/Low)")
-paLineAtrTolerance = input.float(0.3, "PA: Line Proximity (ATR)", minval=0.0, step=0.1)
-paRequireFlow = input.bool(true, "PA: Require Prior Flow")
-paRequireFollow = input.bool(true, "PA: Require Next-Bar Follow-Through")
-showEntryFibLines = input.bool(true, "Show Entry Candidate Lines (Fib 0.786)")
-entryLongColor = input.color(color.new(color.green, 0), "Entry Line Color (Long)")
-entryShortColor = input.color(color.new(color.red, 0), "Entry Line Color (Short)")
-entryLineWidth = input.int(1, "Entry Line Width", minval=1, maxval=5)
-entryLineStyle = input.string("Dashed", "Entry Line Style", options=["Solid", "Dashed", "Dotted"])
-showPositionLines = input.bool(true, "Show Position Lines")
-positionLongColor = input.color(color.new(color.green, 0), "Position Line Color (Long)")
-positionShortColor = input.color(color.new(color.red, 0), "Position Line Color (Short)")
-positionLineWidth = input.int(2, "Position Line Width", minval=1, maxval=5)
-positionLineStyle = input.string("Solid", "Position Line Style", options=["Solid", "Dashed", "Dotted"])
-showTakeProfitLines = input.bool(true, "Show Take Profit Lines")
-tpLongColor = input.color(color.new(color.green, 0), "TP Line Color (Long)")
-tpShortColor = input.color(color.new(color.red, 0), "TP Line Color (Short)")
-tpLineWidth = input.int(1, "TP Line Width", minval=1, maxval=5)
-tpLineStyle = input.string("Dotted", "TP Line Style", options=["Solid", "Dashed", "Dotted"])
 
 // Timeframes to evaluate
 tf1 = input.timeframe("5", "TF1")
@@ -176,94 +151,9 @@ if acceptLow
     if showPivotLines
         addPivotLine(pivotLowLines, pl, pivotLowColor)
 
-// Yosuga-style PA (provisional) on signal-confirm bars
-trendUp = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh > prevMajorHigh and lastMajorLow > prevMajorLow
-trendDown = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh < prevMajorHigh and lastMajorLow < prevMajorLow
-
-entryLineStyleResolved = entryLineStyle == "Dashed" ? line.style_dashed : entryLineStyle == "Dotted" ? line.style_dotted : line.style_solid
-positionLineStyleResolved = positionLineStyle == "Dashed" ? line.style_dashed : positionLineStyle == "Dotted" ? line.style_dotted : line.style_solid
-tpLineStyleResolved = tpLineStyle == "Dashed" ? line.style_dashed : tpLineStyle == "Dotted" ? line.style_dotted : line.style_solid
-
-fibUpRange = not na(swingUpHigh) and not na(swingUpLow) ? (swingUpHigh - swingUpLow) : na
-fibDownRange = not na(swingDownHigh) and not na(swingDownLow) ? (swingDownHigh - swingDownLow) : na
-fibUp786 = not na(fibUpRange) ? (swingUpHigh - fibUpRange * 0.786) : na
-fibDown786 = not na(fibDownRange) ? (swingDownLow + fibDownRange * 0.786) : na
-
-var line entryLongLine = na
-var line entryShortLine = na
-if barstate.islast and showEntryFibLines
-    if not na(entryLongLine)
-        line.delete(entryLongLine)
-    if not na(entryShortLine)
-        line.delete(entryShortLine)
-    if (trendUp or (not trendUp and not trendDown)) and not na(fibUp786)
-        entryLongLine := line.new(bar_index - 1, fibUp786, bar_index, fibUp786, extend=extend.right, color=entryLongColor, width=entryLineWidth, style=entryLineStyleResolved)
-    if (trendDown or (not trendUp and not trendDown)) and not na(fibDown786)
-        entryShortLine := line.new(bar_index - 1, fibDown786, bar_index, fibDown786, extend=extend.right, color=entryShortColor, width=entryLineWidth, style=entryLineStyleResolved)
-
-bodyPrev = math.abs(close[1] - open[1])
-upperWickPrev = high[1] - math.max(open[1], close[1])
-lowerWickPrev = math.min(open[1], close[1]) - low[1]
-longUpperWickPrev = paLongUpperWick and bodyPrev > 0 and upperWickPrev >= bodyPrev * paWickBodyRatio
-longLowerWickPrev = paLongLowerWick and bodyPrev > 0 and lowerWickPrev >= bodyPrev * paLowerWickBodyRatio
-smallLowerWickPrev = bodyPrev > 0 and lowerWickPrev <= bodyPrev * paOppWickBodyMax
-smallUpperWickPrev = bodyPrev > 0 and upperWickPrev <= bodyPrev * paOppWickBodyMax
-
-nearHighLevel = not paRequireLine or ((not na(lastMajorHigh) and math.abs(high[1] - lastMajorHigh) <= atr * paLineAtrTolerance) or (not na(prevMajorHigh) and math.abs(high[1] - prevMajorHigh) <= atr * paLineAtrTolerance) or (not na(swingUpHigh) and math.abs(high[1] - swingUpHigh) <= atr * paLineAtrTolerance))
-nearLowLevel = not paRequireLine or ((not na(lastMajorLow) and math.abs(low[1] - lastMajorLow) <= atr * paLineAtrTolerance) or (not na(prevMajorLow) and math.abs(low[1] - prevMajorLow) <= atr * paLineAtrTolerance) or (not na(swingDownLow) and math.abs(low[1] - swingDownLow) <= atr * paLineAtrTolerance))
-
-flowOkDown = not paRequireFlow or (trendUp or lastPivotDir == 1)
-flowOkUp = not paRequireFlow or (trendDown or lastPivotDir == -1)
-
-followDown = not paRequireFollow or (close < close[1] and close < open)
-followUp = not paRequireFollow or (close > close[1] and close > open)
-
-paDown = showPaMarks and longUpperWickPrev and smallLowerWickPrev and nearHighLevel and flowOkDown and followDown
-paUp = showPaMarks and longLowerWickPrev and smallUpperWickPrev and nearLowLevel and flowOkUp and followUp
-plotshape(paDown, title="Yosuga PA Mark Down", style=shape.labeldown, location=location.abovebar,
-  color=color.new(color.red, 0), text="PA", textcolor=color.white, size=size.tiny)
-plotshape(paUp, title="Yosuga PA Mark Up", style=shape.labelup, location=location.belowbar,
-  color=color.new(color.green, 0), text="PA", textcolor=color.white, size=size.tiny)
-
-var line positionLongLine = na
-var line positionShortLine = na
-var line tpLongLine = na
-var line tpShortLine = na
-
-if barstate.islast and showPositionLines
-    if not na(positionLongLine)
-        line.delete(positionLongLine)
-    if not na(positionShortLine)
-        line.delete(positionShortLine)
-
-if barstate.islast and showTakeProfitLines
-    if not na(tpLongLine)
-        line.delete(tpLongLine)
-    if not na(tpShortLine)
-        line.delete(tpShortLine)
-
-if paUp and showPositionLines and not na(fibUp786)
-    if not na(positionLongLine)
-        line.delete(positionLongLine)
-    positionLongLine := line.new(bar_index, fibUp786, bar_index + 1, fibUp786, extend=extend.right, color=positionLongColor, width=positionLineWidth, style=positionLineStyleResolved)
-
-if paDown and showPositionLines and not na(fibDown786)
-    if not na(positionShortLine)
-        line.delete(positionShortLine)
-    positionShortLine := line.new(bar_index, fibDown786, bar_index + 1, fibDown786, extend=extend.right, color=positionShortColor, width=positionLineWidth, style=positionLineStyleResolved)
-
-if paUp and showTakeProfitLines and not na(swingUpHigh)
-    if not na(tpLongLine)
-        line.delete(tpLongLine)
-    tpLongLine := line.new(bar_index, swingUpHigh, bar_index + 1, swingUpHigh, extend=extend.right, color=tpLongColor, width=tpLineWidth, style=tpLineStyleResolved)
-
-if paDown and showTakeProfitLines and not na(swingDownLow)
-    if not na(tpShortLine)
-        line.delete(tpShortLine)
-    tpShortLine := line.new(bar_index, swingDownLow, bar_index + 1, swingDownLow, extend=extend.right, color=tpShortColor, width=tpLineWidth, style=tpLineStyleResolved)
 
 // Table UI
-var table t = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 80))
+var table t = table.new(position.bottom_right, 2, 7, bgcolor=color.new(color.black, 80))
 if barstate.islast
     table.cell(t, 0, 0, "TF", text_color=color.white, text_halign=text.align_center)
     table.cell(t, 1, 0, "Trend", text_color=color.white, text_halign=text.align_center)
