@@ -1,0 +1,126 @@
+//@version=5
+indicator("First Trend Movement", overlay=true, max_lines_count=100, max_labels_count=200)
+
+trendTf = input.timeframe("60", "Trend Timeframe")
+pivotLen = input.int(6, "Pivot Length", minval=1)
+useAtrFilter = input.bool(false, "Filter Small Swings")
+atrLen = input.int(14, "ATR Length", minval=1)
+minSwingAtr = input.float(0.5, "Min Swing (ATR)", minval=0.0, step=0.1)
+showLine = input.bool(true, "Show First Move Line")
+showLabels = input.bool(true, "Show Pivot Labels")
+keepHistory = input.bool(false, "Keep History")
+upColor = input.color(color.new(color.green, 0), "Up Move Color")
+downColor = input.color(color.new(color.red, 0), "Down Move Color")
+labelSizeOpt = input.string("Tiny", "Label Size", options=["Tiny", "Small", "Normal"])
+lineWidth = input.int(2, "Line Width", minval=1, maxval=5)
+lineStyleOpt = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"])
+lineStyle = lineStyleOpt == "Dashed" ? line.style_dashed : lineStyleOpt == "Dotted" ? line.style_dotted : line.style_solid
+
+label_size_from_text(string sizeTxt) =>
+    sizeTxt == "Tiny" ? size.tiny : sizeTxt == "Small" ? size.small : size.normal
+
+f_trend_state() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+    atr = ta.atr(atrLen)
+
+    var float lastMajorHigh = na
+    var float prevMajorHigh = na
+    var float lastMajorLow = na
+    var float prevMajorLow = na
+    var int lastMajorHighTime = na
+    var int lastMajorLowTime = na
+    var int lastPivotDir = 0
+
+    var float swingUpLow = na
+    var float swingUpHigh = na
+    var int swingUpLowTime = na
+    var int swingUpHighTime = na
+    var float swingDownHigh = na
+    var float swingDownLow = na
+    var int swingDownHighTime = na
+    var int swingDownLowTime = na
+
+    acceptHigh = not na(ph) and (not useAtrFilter or na(lastMajorLow) or ph - lastMajorLow >= minSwingAtr * atr)
+    acceptLow = not na(pl) and (not useAtrFilter or na(lastMajorHigh) or lastMajorHigh - pl >= minSwingAtr * atr)
+
+    if acceptHigh
+        prevMajorHigh := lastMajorHigh
+        lastMajorHigh := ph
+        lastMajorHighTime := time[pivotLen]
+        if lastPivotDir == -1 and not na(lastMajorLow)
+            swingUpLow := lastMajorLow
+            swingUpHigh := ph
+            swingUpLowTime := lastMajorLowTime
+            swingUpHighTime := lastMajorHighTime
+        lastPivotDir := 1
+
+    if acceptLow
+        prevMajorLow := lastMajorLow
+        lastMajorLow := pl
+        lastMajorLowTime := time[pivotLen]
+        if lastPivotDir == 1 and not na(lastMajorHigh)
+            swingDownHigh := lastMajorHigh
+            swingDownLow := pl
+            swingDownHighTime := lastMajorHighTime
+            swingDownLowTime := lastMajorLowTime
+        lastPivotDir := -1
+
+    trendUp = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh > prevMajorHigh and lastMajorLow > prevMajorLow
+    trendDown = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh < prevMajorHigh and lastMajorLow < prevMajorLow
+    trendDir = trendUp ? 1 : trendDown ? -1 : 0
+
+    [swingUpLow, swingUpHigh, swingUpLowTime, swingUpHighTime, swingDownHigh, swingDownLow, swingDownHighTime, swingDownLowTime, trendDir]
+
+[swingUpLow, swingUpHigh, swingUpLowTime, swingUpHighTime, swingDownHigh, swingDownLow, swingDownHighTime, swingDownLowTime, trendDir] = request.security(syminfo.tickerid, trendTf, f_trend_state(), barmerge.gaps_off, barmerge.lookahead_off)
+
+var int trendDirPrev = 0
+var bool firstMoveCaptured = false
+var bool firstMoveJustCaptured = false
+var line firstMoveLine = na
+var label firstMoveLabelA = na
+var label firstMoveLabelB = na
+
+trendChanged = trendDir != trendDirPrev
+if trendChanged
+    firstMoveCaptured := false
+    firstMoveJustCaptured := false
+    trendDirPrev := trendDir
+    if not keepHistory
+        if not na(firstMoveLine)
+            line.delete(firstMoveLine)
+        if not na(firstMoveLabelA)
+            label.delete(firstMoveLabelA)
+        if not na(firstMoveLabelB)
+            label.delete(firstMoveLabelB)
+        firstMoveLine := na
+        firstMoveLabelA := na
+        firstMoveLabelB := na
+
+newUpSwing = trendDir == 1 and not na(swingUpLow) and not na(swingUpHigh) and not na(swingUpLowTime) and not na(swingUpHighTime)
+newDownSwing = trendDir == -1 and not na(swingDownHigh) and not na(swingDownLow) and not na(swingDownHighTime) and not na(swingDownLowTime)
+
+if not firstMoveCaptured
+    if newUpSwing
+        firstMoveCaptured := true
+        firstMoveJustCaptured := true
+        if showLine
+            firstMoveLine := line.new(swingUpLowTime, swingUpLow, swingUpHighTime, swingUpHigh, xloc=xloc.bar_time, extend=extend.none, color=upColor, width=lineWidth, style=lineStyle)
+        if showLabels
+            labelSizeVal = label_size_from_text(labelSizeOpt)
+            firstMoveLabelA := label.new(swingUpLowTime, swingUpLow, "First Up Low", xloc=xloc.bar_time, style=label.style_label_up, textcolor=color.white, color=upColor, size=labelSizeVal)
+            firstMoveLabelB := label.new(swingUpHighTime, swingUpHigh, "First Up High", xloc=xloc.bar_time, style=label.style_label_down, textcolor=color.white, color=upColor, size=labelSizeVal)
+    else if newDownSwing
+        firstMoveCaptured := true
+        firstMoveJustCaptured := true
+        if showLine
+            firstMoveLine := line.new(swingDownHighTime, swingDownHigh, swingDownLowTime, swingDownLow, xloc=xloc.bar_time, extend=extend.none, color=downColor, width=lineWidth, style=lineStyle)
+        if showLabels
+            labelSizeVal = label_size_from_text(labelSizeOpt)
+            firstMoveLabelA := label.new(swingDownHighTime, swingDownHigh, "First Down High", xloc=xloc.bar_time, style=label.style_label_down, textcolor=color.white, color=downColor, size=labelSizeVal)
+            firstMoveLabelB := label.new(swingDownLowTime, swingDownLow, "First Down Low", xloc=xloc.bar_time, style=label.style_label_up, textcolor=color.white, color=downColor, size=labelSizeVal)
+
+plotshape(firstMoveJustCaptured and trendDir == 1, title="First Up Move", style=shape.triangleup, location=location.belowbar, color=upColor, size=size.tiny, text="1st Up")
+plotshape(firstMoveJustCaptured and trendDir == -1, title="First Down Move", style=shape.triangledown, location=location.abovebar, color=downColor, size=size.tiny, text="1st Dn")
+
+firstMoveJustCaptured := false
