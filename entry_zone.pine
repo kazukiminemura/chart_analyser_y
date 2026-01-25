@@ -1,11 +1,11 @@
 //@version=5
-indicator("Trend Entry Zone", overlay=true, max_lines_count=200, max_boxes_count=10, max_labels_count=50)
+indicator("Trend Entry Zone", overlay=true, max_lines_count=300, max_boxes_count=10, max_labels_count=300)
 
 pivotLen = input.int(6, "Pivot Length", minval=1)
 useAtrFilter = input.bool(false, "Filter Small Swings")
 atrLen = input.int(14, "ATR Length", minval=1)
 minSwingAtr = input.float(0.5, "Min Swing (ATR)", minval=0.0, step=0.1)
-trendTf = "60"
+trendTf = "1H"
 zoneRatio1 = input.float(0.5, "Zone Ratio 1", minval=0.0, maxval=1.0, step=0.01)
 zoneRatio2 = input.float(0.618, "Zone Ratio 2", minval=0.0, maxval=1.0, step=0.01)
 showZone = input.bool(true, "Show Entry Zone")
@@ -25,7 +25,26 @@ channelMult = input.float(2.0, "Channel Width (stdev)", minval=0.1, step=0.1)
 channelTf = input.timeframe("240", "Channel Timeframe")
 useChannelFilter = input.bool(true, "Trade With Channel Direction")
 
+// --- First Trend Movement (HTF) ---
+ftmTrendTf = input.timeframe("60", "FTM Trend Timeframe")
+ftmPivotLen = input.int(6, "FTM Pivot Length", minval=1)
+ftmUseAtrFilter = input.bool(false, "FTM Filter Small Swings")
+ftmAtrLen = input.int(14, "FTM ATR Length", minval=1)
+ftmMinSwingAtr = input.float(0.5, "FTM Min Swing (ATR)", minval=0.0, step=0.1)
+ftmShowLine = input.bool(true, "FTM Show First Move Line")
+ftmShowLabels = input.bool(true, "FTM Show Pivot Labels")
+ftmKeepHistory = input.bool(false, "FTM Keep History")
+ftmUpColor = input.color(color.new(color.green, 0), "FTM Up Move Color")
+ftmDownColor = input.color(color.new(color.red, 0), "FTM Down Move Color")
+ftmLabelSizeOpt = input.string("Tiny", "FTM Label Size", options=["Tiny", "Small", "Normal"])
+ftmLineWidth = input.int(2, "FTM Line Width", minval=1, maxval=5)
+ftmLineStyleOpt = input.string("Solid", "FTM Line Style", options=["Solid", "Dashed", "Dotted"])
+ftmLineStyle = ftmLineStyleOpt == "Dashed" ? line.style_dashed : ftmLineStyleOpt == "Dotted" ? line.style_dotted : line.style_solid
+
 float pipSize = syminfo.mintick * pipMult
+
+label_size_from_text_ftm(string sizeTxt) =>
+    sizeTxt == "Tiny" ? size.tiny : sizeTxt == "Small" ? size.small : size.normal
 
 f_trend_state() =>
     ph = ta.pivothigh(high, pivotLen, pivotLen)
@@ -84,6 +103,113 @@ int channelDir = chSlope > 0 ? 1 : chSlope < 0 ? -1 : 0
 bool channelLongOk = not useChannelFilter or channelDir == 1
 bool channelShortOk = not useChannelFilter or channelDir == -1
 
+// --- First Trend Movement logic (HTF) ---
+f_ftm_trend_state() =>
+    ph = ta.pivothigh(high, ftmPivotLen, ftmPivotLen)
+    pl = ta.pivotlow(low, ftmPivotLen, ftmPivotLen)
+    atr = ta.atr(ftmAtrLen)
+
+    var float lastMajorHigh = na
+    var float prevMajorHigh = na
+    var float lastMajorLow = na
+    var float prevMajorLow = na
+    var int lastMajorHighTime = na
+    var int lastMajorLowTime = na
+    var int lastPivotDir = 0
+
+    var float swingUpLow = na
+    var float swingUpHigh = na
+    var int swingUpLowTime = na
+    var int swingUpHighTime = na
+    var float swingDownHigh = na
+    var float swingDownLow = na
+    var int swingDownHighTime = na
+    var int swingDownLowTime = na
+
+    acceptHigh = not na(ph) and (not ftmUseAtrFilter or na(lastMajorLow) or ph - lastMajorLow >= ftmMinSwingAtr * atr)
+    acceptLow = not na(pl) and (not ftmUseAtrFilter or na(lastMajorHigh) or lastMajorHigh - pl >= ftmMinSwingAtr * atr)
+
+    if acceptHigh
+        prevMajorHigh := lastMajorHigh
+        lastMajorHigh := ph
+        lastMajorHighTime := time[ftmPivotLen]
+        if lastPivotDir == -1 and not na(lastMajorLow)
+            swingUpLow := lastMajorLow
+            swingUpHigh := ph
+            swingUpLowTime := lastMajorLowTime
+            swingUpHighTime := lastMajorHighTime
+        lastPivotDir := 1
+
+    if acceptLow
+        prevMajorLow := lastMajorLow
+        lastMajorLow := pl
+        lastMajorLowTime := time[ftmPivotLen]
+        if lastPivotDir == 1 and not na(lastMajorHigh)
+            swingDownHigh := lastMajorHigh
+            swingDownLow := pl
+            swingDownHighTime := lastMajorHighTime
+            swingDownLowTime := lastMajorLowTime
+        lastPivotDir := -1
+
+    trendUp = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh > prevMajorHigh and lastMajorLow > prevMajorLow
+    trendDown = not na(lastMajorHigh) and not na(prevMajorHigh) and not na(lastMajorLow) and not na(prevMajorLow) and lastMajorHigh < prevMajorHigh and lastMajorLow < prevMajorLow
+    trendDir = trendUp ? 1 : trendDown ? -1 : 0
+
+    [swingUpLow, swingUpHigh, swingUpLowTime, swingUpHighTime, swingDownHigh, swingDownLow, swingDownHighTime, swingDownLowTime, trendDir]
+
+[ftmSwingUpLow, ftmSwingUpHigh, ftmSwingUpLowTime, ftmSwingUpHighTime, ftmSwingDownHigh, ftmSwingDownLow, ftmSwingDownHighTime, ftmSwingDownLowTime, ftmTrendDir] = request.security(syminfo.tickerid, ftmTrendTf, f_ftm_trend_state(), barmerge.gaps_off, barmerge.lookahead_off)
+
+var int ftmTrendDirPrev = 0
+var bool ftmFirstMoveCaptured = false
+var bool ftmFirstMoveJustCaptured = false
+var line ftmFirstMoveLine = na
+var label ftmFirstMoveLabelA = na
+var label ftmFirstMoveLabelB = na
+
+ftmTrendChanged = ftmTrendDir != ftmTrendDirPrev
+if ftmTrendChanged
+    ftmFirstMoveCaptured := false
+    ftmFirstMoveJustCaptured := false
+    ftmTrendDirPrev := ftmTrendDir
+    if not ftmKeepHistory
+        if not na(ftmFirstMoveLine)
+            line.delete(ftmFirstMoveLine)
+        if not na(ftmFirstMoveLabelA)
+            label.delete(ftmFirstMoveLabelA)
+        if not na(ftmFirstMoveLabelB)
+            label.delete(ftmFirstMoveLabelB)
+        ftmFirstMoveLine := na
+        ftmFirstMoveLabelA := na
+        ftmFirstMoveLabelB := na
+
+ftmNewUpSwing = ftmTrendDir == 1 and not na(ftmSwingUpLow) and not na(ftmSwingUpHigh) and not na(ftmSwingUpLowTime) and not na(ftmSwingUpHighTime)
+ftmNewDownSwing = ftmTrendDir == -1 and not na(ftmSwingDownHigh) and not na(ftmSwingDownLow) and not na(ftmSwingDownHighTime) and not na(ftmSwingDownLowTime)
+
+if not ftmFirstMoveCaptured
+    if ftmNewUpSwing
+        ftmFirstMoveCaptured := true
+        ftmFirstMoveJustCaptured := true
+        if ftmShowLine
+            ftmFirstMoveLine := line.new(ftmSwingUpLowTime, ftmSwingUpLow, ftmSwingUpHighTime, ftmSwingUpHigh, xloc=xloc.bar_time, extend=extend.none, color=ftmUpColor, width=ftmLineWidth, style=ftmLineStyle)
+        if ftmShowLabels
+            ftmLabelSizeVal = label_size_from_text_ftm(ftmLabelSizeOpt)
+            ftmFirstMoveLabelA := label.new(ftmSwingUpLowTime, ftmSwingUpLow, "FTM Up Low", xloc=xloc.bar_time, style=label.style_label_up, textcolor=color.white, color=ftmUpColor, size=ftmLabelSizeVal)
+            ftmFirstMoveLabelB := label.new(ftmSwingUpHighTime, ftmSwingUpHigh, "FTM Up High", xloc=xloc.bar_time, style=label.style_label_down, textcolor=color.white, color=ftmUpColor, size=ftmLabelSizeVal)
+    else if ftmNewDownSwing
+        ftmFirstMoveCaptured := true
+        ftmFirstMoveJustCaptured := true
+        if ftmShowLine
+            ftmFirstMoveLine := line.new(ftmSwingDownHighTime, ftmSwingDownHigh, ftmSwingDownLowTime, ftmSwingDownLow, xloc=xloc.bar_time, extend=extend.none, color=ftmDownColor, width=ftmLineWidth, style=ftmLineStyle)
+        if ftmShowLabels
+            ftmLabelSizeVal = label_size_from_text_ftm(ftmLabelSizeOpt)
+            ftmFirstMoveLabelA := label.new(ftmSwingDownHighTime, ftmSwingDownHigh, "FTM Down High", xloc=xloc.bar_time, style=label.style_label_down, textcolor=color.white, color=ftmDownColor, size=ftmLabelSizeVal)
+            ftmFirstMoveLabelB := label.new(ftmSwingDownLowTime, ftmSwingDownLow, "FTM Down Low", xloc=xloc.bar_time, style=label.style_label_up, textcolor=color.white, color=ftmDownColor, size=ftmLabelSizeVal)
+
+plotshape(ftmFirstMoveJustCaptured and ftmTrendDir == 1, title="FTM First Up Move", style=shape.triangleup, location=location.belowbar, color=ftmUpColor, size=size.tiny, text="FTM Up")
+plotshape(ftmFirstMoveJustCaptured and ftmTrendDir == -1, title="FTM First Down Move", style=shape.triangledown, location=location.abovebar, color=ftmDownColor, size=size.tiny, text="FTM Dn")
+
+ftmFirstMoveJustCaptured := false
+
 
 lowRatio = math.min(zoneRatio1, zoneRatio2)
 highRatio = math.max(zoneRatio1, zoneRatio2)
@@ -98,7 +224,7 @@ var line[] zoneHistory = array.new_line()
 var label zoneTopLabel = na
 var label zoneBottomLabel = na
 var label[] zoneLabelHistory = array.new_label()
-dayMs = 24 * 60 * 60 * 1000
+dayMs = 3 * 24 * 60 * 60 * 1000
 
 float zoneTopSeries = na
 float zoneBottomSeries = na
