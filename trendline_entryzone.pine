@@ -1,0 +1,157 @@
+//@version=5
+indicator("Trendline (Lows, 1H)", overlay=true, max_lines_count=200)
+
+// === Inputs ===
+pivotLen = input.int(4, "Pivot Length", minval=1)
+trendTf = input.timeframe("60", "Trend Timeframe (1H)")
+requireHigherHighs = input.bool(true, "Require Higher Highs (Uptrend)")
+requireLowerLows = input.bool(true, "Require Lower Lows (Downtrend)")
+maxLines = input.int(10, "Max Recent Trendlines", minval=1, maxval=50)
+lineColor = input.color(color.new(color.teal, 0), "Line Color")
+downLineColor = input.color(color.new(color.orange, 0), "Downtrend Line Color")
+lineWidth = input.int(2, "Line Width", minval=1, maxval=4)
+lineStyleOpt = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"])
+lineStyle = lineStyleOpt == "Dashed" ? line.style_dashed : lineStyleOpt == "Dotted" ? line.style_dotted : line.style_solid
+lengthMult = input.float(1.0, "Line Length Multiplier", minval=0.2, maxval=5.0, step=0.1)
+zoneRatio1 = input.float(0.382, "Zone Ratio 1", minval=0.0, maxval=1.0, step=0.01)
+zoneRatio2 = input.float(0.786, "Zone Ratio 2", minval=0.0, maxval=1.0, step=0.01)
+showZone = input.bool(true, "Show Entry Zone")
+zoneLineWidth = input.int(2, "Zone Line Width", minval=1, maxval=5)
+historyZones = input.int(200, "History Zones", minval=1, maxval=1000)
+upZoneColor = input.color(color.new(color.green, 0), "Up Zone Color")
+downZoneColor = input.color(color.new(color.red, 0), "Down Zone Color")
+zoneLineStyle = line.style_dashed
+
+// === 4H Pivot tracking (time-based) ===
+f_pivots_4h() =>
+    var int lastLowTime = na
+    var float lastLowPrice = na
+    var int prevLowTime = na
+    var float prevLowPrice = na
+
+    var int lastHighTime = na
+    var float lastHighPrice = na
+    var int prevHighTime = na
+    var float prevHighPrice = na
+
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+    if not na(ph)
+        prevHighTime := lastHighTime
+        prevHighPrice := lastHighPrice
+        lastHighTime := time[pivotLen]
+        lastHighPrice := ph
+
+    if not na(pl)
+        prevLowTime := lastLowTime
+        prevLowPrice := lastLowPrice
+        lastLowTime := time[pivotLen]
+        lastLowPrice := pl
+
+    [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, not na(pl), not na(ph)]
+
+[prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow, newPivotHigh] = request.security(syminfo.tickerid, trendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// === Trend check (like the screenshot: higher lows in an uptrend) ===
+trendOk = not na(prevLowPrice) and not na(lastLowPrice) and lastLowPrice > prevLowPrice
+if requireHigherHighs
+    trendOk := trendOk and not na(prevHighPrice) and not na(lastHighPrice) and lastHighPrice > prevHighPrice
+trendDownOk = not na(prevHighPrice) and not na(lastHighPrice) and lastHighPrice < prevHighPrice
+if requireLowerLows
+    trendDownOk := trendDownOk and not na(prevLowPrice) and not na(lastLowPrice) and lastLowPrice < prevLowPrice
+
+var line lowTrend = na
+var line[] lowTrends = array.new_line()
+var line highTrend = na
+var line[] highTrends = array.new_line()
+
+lowRatio = math.min(zoneRatio1, zoneRatio2)
+highRatio = math.max(zoneRatio1, zoneRatio2)
+var line zoneTopLine = na
+var line zoneBottomLine = na
+var line[] zoneHistory = array.new_line()
+var float lastZoneTop = na
+var float lastZoneBottom = na
+dayMs = 24 * 60 * 60 * 1000
+
+f_calc_zone(float swingLow, float swingHigh, bool isUp, float rLow, float rHigh) =>
+    float zTop = na
+    float zBot = na
+    if not na(swingLow) and not na(swingHigh)
+        float swingRange = swingHigh - swingLow
+        if isUp
+            zTop := swingHigh - swingRange * rLow
+            zBot := swingHigh - swingRange * rHigh
+        else
+            zTop := swingLow + swingRange * rLow
+            zBot := swingLow + swingRange * rHigh
+    [zTop, zBot]
+
+f_push_zone_history(int x1, int x2, float top, float bot, color zoneColor, int w, line[] hist, int maxZones) =>
+    line l1 = line.new(x1, top, x2, top, xloc=xloc.bar_time, extend=extend.none, color=zoneColor, width=w, style=zoneLineStyle)
+    line l2 = line.new(x1, bot, x2, bot, xloc=xloc.bar_time, extend=extend.none, color=zoneColor, width=w, style=zoneLineStyle)
+    array.push(hist, l1)
+    array.push(hist, l2)
+    while array.size(hist) > maxZones * 2
+        line old = array.shift(hist)
+        if not na(old)
+            line.delete(old)
+
+if newPivotLow and trendOk and not na(prevLowTime) and not na(lastLowTime) and prevLowTime < lastLowTime
+    float seg = lastLowTime - prevLowTime
+    int endTime = int(lastLowTime + seg * lengthMult)
+    float slopeT = (lastLowPrice - prevLowPrice) / seg
+    float endPrice = lastLowPrice + slopeT * float(endTime - lastLowTime)
+    lowTrend := line.new(prevLowTime, prevLowPrice, endTime, endPrice, xloc=xloc.bar_time, extend=extend.none, color=lineColor, width=lineWidth, style=lineStyle)
+    array.push(lowTrends, lowTrend)
+    if array.size(lowTrends) > maxLines
+        line.delete(array.shift(lowTrends))
+
+if newPivotHigh and trendDownOk and not na(prevHighTime) and not na(lastHighTime) and prevHighTime < lastHighTime
+    float segH = lastHighTime - prevHighTime
+    int endTimeH = int(lastHighTime + segH * lengthMult)
+    float slopeH = (lastHighPrice - prevHighPrice) / segH
+    float endPriceH = lastHighPrice + slopeH * float(endTimeH - lastHighTime)
+    highTrend := line.new(prevHighTime, prevHighPrice, endTimeH, endPriceH, xloc=xloc.bar_time, extend=extend.none, color=downLineColor, width=lineWidth, style=lineStyle)
+    array.push(highTrends, highTrend)
+    if array.size(highTrends) > maxLines
+        line.delete(array.shift(highTrends))
+
+bool haveSwingUp = not na(lastHighTime) and not na(lastLowTime) and lastHighTime > lastLowTime and not na(lastHighPrice) and not na(lastLowPrice)
+bool haveSwingDown = not na(lastHighTime) and not na(lastLowTime) and lastLowTime > lastHighTime and not na(lastHighPrice) and not na(lastLowPrice)
+
+float zoneTopSeries = na
+float zoneBottomSeries = na
+float zoneTopTmp = na
+float zoneBottomTmp = na
+if haveSwingUp
+    [zoneTopTmp, zoneBottomTmp] = f_calc_zone(lastLowPrice, lastHighPrice, true, lowRatio, highRatio)
+    zoneTopSeries := zoneTopTmp
+    zoneBottomSeries := zoneBottomTmp
+else if haveSwingDown
+    [zoneTopTmp, zoneBottomTmp] = f_calc_zone(lastLowPrice, lastHighPrice, false, lowRatio, highRatio)
+    zoneTopSeries := zoneTopTmp
+    zoneBottomSeries := zoneBottomTmp
+
+if barstate.islast
+    if not na(zoneTopLine)
+        line.delete(zoneTopLine)
+    if not na(zoneBottomLine)
+        line.delete(zoneBottomLine)
+    if showZone and not na(zoneTopSeries) and not na(zoneBottomSeries)
+        color zoneColor = haveSwingUp ? upZoneColor : downZoneColor
+        int zoneStartTime = time[1]
+        int zoneEndTime = time
+        zoneTopLine := line.new(zoneStartTime, zoneTopSeries, zoneEndTime, zoneTopSeries, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+        zoneBottomLine := line.new(zoneStartTime, zoneBottomSeries, zoneEndTime, zoneBottomSeries, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+
+if barstate.isconfirmed and showZone and not na(zoneTopSeries) and not na(zoneBottomSeries)
+    bool changed = na(lastZoneTop) or na(lastZoneBottom) or zoneTopSeries != lastZoneTop or zoneBottomSeries != lastZoneBottom
+    if changed
+        color zoneColor = haveSwingUp ? upZoneColor : downZoneColor
+        int x1 = time
+        int x2 = time + dayMs
+        f_push_zone_history(x1, x2, zoneTopSeries, zoneBottomSeries, zoneColor, zoneLineWidth, zoneHistory, historyZones)
+        lastZoneTop := zoneTopSeries
+        lastZoneBottom := zoneBottomSeries
