@@ -1,0 +1,57 @@
+//@version=5
+indicator("Trendline (Lows, 4H)", overlay=true, max_lines_count=100)
+
+// === Inputs ===
+pivotLen = input.int(4, "Pivot Length", minval=1)
+trendTf = input.timeframe("240", "Trend Timeframe (4H)")
+requireHigherHighs = input.bool(true, "Require Higher Highs (Uptrend)")
+maxLines = input.int(10, "Max Recent Trendlines", minval=1, maxval=50)
+lineColor = input.color(color.new(color.teal, 0), "Line Color")
+lineWidth = input.int(2, "Line Width", minval=1, maxval=4)
+lineStyleOpt = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"])
+lineStyle = lineStyleOpt == "Dashed" ? line.style_dashed : lineStyleOpt == "Dotted" ? line.style_dotted : line.style_solid
+
+// === 4H Pivot tracking (time-based) ===
+f_pivots_4h() =>
+    var int lastLowTime = na
+    var float lastLowPrice = na
+    var int prevLowTime = na
+    var float prevLowPrice = na
+
+    var int lastHighTime = na
+    var float lastHighPrice = na
+    var int prevHighTime = na
+    var float prevHighPrice = na
+
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+    if not na(ph)
+        prevHighTime := lastHighTime
+        prevHighPrice := lastHighPrice
+        lastHighTime := time[pivotLen]
+        lastHighPrice := ph
+
+    if not na(pl)
+        prevLowTime := lastLowTime
+        prevLowPrice := lastLowPrice
+        lastLowTime := time[pivotLen]
+        lastLowPrice := pl
+
+    [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, not na(pl)]
+
+[prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow] = request.security(syminfo.tickerid, trendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+
+// === Trend check (like the screenshot: higher lows in an uptrend) ===
+trendOk = not na(prevLowPrice) and not na(lastLowPrice) and lastLowPrice > prevLowPrice
+if requireHigherHighs
+    trendOk := trendOk and not na(prevHighPrice) and not na(lastHighPrice) and lastHighPrice > prevHighPrice
+
+var line lowTrend = na
+var line[] lowTrends = array.new_line()
+
+if newPivotLow and trendOk and not na(prevLowTime) and not na(lastLowTime) and prevLowTime < lastLowTime
+    lowTrend := line.new(prevLowTime, prevLowPrice, lastLowTime, lastLowPrice, xloc=xloc.bar_time, extend=extend.right, color=lineColor, width=lineWidth, style=lineStyle)
+    array.push(lowTrends, lowTrend)
+    if array.size(lowTrends) > maxLines
+        line.delete(array.shift(lowTrends))
