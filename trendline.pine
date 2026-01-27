@@ -10,6 +10,7 @@ lineColor = input.color(color.new(color.teal, 0), "Line Color")
 lineWidth = input.int(2, "Line Width", minval=1, maxval=4)
 lineStyleOpt = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"])
 lineStyle = lineStyleOpt == "Dashed" ? line.style_dashed : lineStyleOpt == "Dotted" ? line.style_dotted : line.style_solid
+lengthMult = input.float(1.0, "Line Length Multiplier", minval=0.2, maxval=5.0, step=0.1)
 
 // === 4H Pivot tracking (time-based) ===
 f_pivots_4h() =>
@@ -51,7 +52,11 @@ var line lowTrend = na
 var line[] lowTrends = array.new_line()
 
 if newPivotLow and trendOk and not na(prevLowTime) and not na(lastLowTime) and prevLowTime < lastLowTime
-    lowTrend := line.new(prevLowTime, prevLowPrice, lastLowTime, lastLowPrice, xloc=xloc.bar_time, extend=extend.right, color=lineColor, width=lineWidth, style=lineStyle)
+    float seg = lastLowTime - prevLowTime
+    int endTime = int(lastLowTime + seg * lengthMult)
+    float slopeT = (lastLowPrice - prevLowPrice) / seg
+    float endPrice = lastLowPrice + slopeT * float(endTime - lastLowTime)
+    lowTrend := line.new(prevLowTime, prevLowPrice, endTime, endPrice, xloc=xloc.bar_time, extend=extend.none, color=lineColor, width=lineWidth, style=lineStyle)
     array.push(lowTrends, lowTrend)
     if array.size(lowTrends) > maxLines
         line.delete(array.shift(lowTrends))
