@@ -23,6 +23,7 @@ downZoneColor = input.color(color.new(color.red, 0), "Down Zone Color")
 zoneLineStyle = line.style_dashed
 morningSession = input.session("0600-1100", "Morning Session")
 morningTz = input.string("Asia/Tokyo", "Morning Timezone")
+showWinrate = input.bool(true, "Show Win Rate")
 
 // === Pivot tracking (time-based) ===
 f_pivots_4h() =>
@@ -173,3 +174,63 @@ if barstate.isconfirmed and showZone and inMorning and not na(zoneTopSeries) and
         f_push_zone_history(x1, x2, zoneTopSeries, zoneBottomSeries, zoneColor, zoneLineWidth, zoneHistory, historyZones)
         lastZoneTop := zoneTopSeries
         lastZoneBottom := zoneBottomSeries
+
+// === Entry + Winrate (bounce in zone, TP at prior high/low) ===
+var bool inTrade = false
+var int tradeDir = 0
+var float tpPrice = na
+var float slPrice = na
+var float entryPrice = na
+var int wins = 0
+var int losses = 0
+var int totalTrades = 0
+
+bool bounceLong = inMorning and haveSwingUp and not na(zoneTopSeries) and not na(zoneBottomSeries) and low <= zoneTopSeries and close > zoneTopSeries
+bool bounceShort = inMorning and haveSwingDown and not na(zoneTopSeries) and not na(zoneBottomSeries) and high >= zoneBottomSeries and close < zoneBottomSeries
+
+if not inTrade
+    if bounceLong and not na(lastHighPrice) and not na(lastLowPrice) and lastHighPrice > lastLowPrice
+        inTrade := true
+        tradeDir := 1
+        entryPrice := close
+        tpPrice := lastHighPrice
+        slPrice := lastLowPrice
+        totalTrades += 1
+    else if bounceShort and not na(lastHighPrice) and not na(lastLowPrice) and lastLowPrice < lastHighPrice
+        inTrade := true
+        tradeDir := -1
+        entryPrice := close
+        tpPrice := lastLowPrice
+        slPrice := lastHighPrice
+        totalTrades += 1
+
+if inTrade
+    bool win = false
+    bool loss = false
+    if tradeDir == 1
+        win := high >= tpPrice
+        loss := low <= slPrice and not win
+    else if tradeDir == -1
+        win := low <= tpPrice
+        loss := high >= slPrice and not win
+
+    if win
+        wins += 1
+        inTrade := false
+        tradeDir := 0
+    else if loss
+        losses += 1
+        inTrade := false
+        tradeDir := 0
+
+// === Stats table ===
+var table stats = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80))
+if barstate.islast and showWinrate
+    int total = wins + losses
+    float winrate = total > 0 ? wins * 100.0 / total : na
+    table.cell(stats, 0, 0, "Win Rate", text_color=color.white)
+    table.cell(stats, 1, 0, total > 0 ? str.format("{0,number,#.##}%", winrate) : "N/A", text_color=color.white)
+    table.cell(stats, 0, 1, "W/L", text_color=color.white)
+    table.cell(stats, 1, 1, str.format("{0}/{1}", wins, losses), text_color=color.white)
+    table.cell(stats, 0, 2, "Trades", text_color=color.white)
+    table.cell(stats, 1, 2, str.format("{0}", totalTrades), text_color=color.white)
