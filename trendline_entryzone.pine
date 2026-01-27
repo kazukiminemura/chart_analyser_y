@@ -21,8 +21,10 @@ historyZones = input.int(200, "History Zones", minval=1, maxval=1000)
 upZoneColor = input.color(color.new(color.green, 0), "Up Zone Color")
 downZoneColor = input.color(color.new(color.red, 0), "Down Zone Color")
 zoneLineStyle = line.style_dashed
+morningSession = input.session("0600-1100", "Morning Session")
+morningTz = input.string("Asia/Tokyo", "Morning Timezone")
 
-// === 4H Pivot tracking (time-based) ===
+// === Pivot tracking (time-based) ===
 f_pivots_4h() =>
     var int lastLowTime = na
     var float lastLowPrice = na
@@ -53,7 +55,7 @@ f_pivots_4h() =>
 
 [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow, newPivotHigh] = request.security(syminfo.tickerid, trendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
 
-// === Trend check (like the screenshot: higher lows in an uptrend) ===
+// === Trend check (higher lows / lower highs) ===
 trendOk = not na(prevLowPrice) and not na(lastLowPrice) and lastLowPrice > prevLowPrice
 if requireHigherHighs
     trendOk := trendOk and not na(prevHighPrice) and not na(lastHighPrice) and lastHighPrice > prevHighPrice
@@ -66,6 +68,7 @@ var line[] lowTrends = array.new_line()
 var line highTrend = na
 var line[] highTrends = array.new_line()
 
+// === Zone helpers ===
 lowRatio = math.min(zoneRatio1, zoneRatio2)
 highRatio = math.max(zoneRatio1, zoneRatio2)
 var line zoneTopLine = na
@@ -74,6 +77,9 @@ var line[] zoneHistory = array.new_line()
 var float lastZoneTop = na
 var float lastZoneBottom = na
 dayMs = 24 * 60 * 60 * 1000
+
+f_is_in_session(string sess, string tz) =>
+    not na(time(timeframe.period, sess, tz))
 
 f_calc_zone(float swingLow, float swingHigh, bool isUp, float rLow, float rHigh) =>
     float zTop = na
@@ -97,6 +103,21 @@ f_push_zone_history(int x1, int x2, float top, float bot, color zoneColor, int w
         line old = array.shift(hist)
         if not na(old)
             line.delete(old)
+
+f_draw_zone_current(line prevTop, line prevBot, bool showNow, float top, float bot, bool isUp, color upColor, color downColor, int w) =>
+    if not na(prevTop)
+        line.delete(prevTop)
+    if not na(prevBot)
+        line.delete(prevBot)
+    line newTop = na
+    line newBot = na
+    if showNow and not na(top) and not na(bot)
+        color zoneColor = isUp ? upColor : downColor
+        int zoneStartTime = time[1]
+        int zoneEndTime = time
+        newTop := line.new(zoneStartTime, top, zoneEndTime, top, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=w, style=zoneLineStyle)
+        newBot := line.new(zoneStartTime, bot, zoneEndTime, bot, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=w, style=zoneLineStyle)
+    [newTop, newBot]
 
 if newPivotLow and trendOk and not na(prevLowTime) and not na(lastLowTime) and prevLowTime < lastLowTime
     float seg = lastLowTime - prevLowTime
@@ -134,19 +155,16 @@ else if haveSwingDown
     zoneTopSeries := zoneTopTmp
     zoneBottomSeries := zoneBottomTmp
 
-if barstate.islast
-    if not na(zoneTopLine)
-        line.delete(zoneTopLine)
-    if not na(zoneBottomLine)
-        line.delete(zoneBottomLine)
-    if showZone and not na(zoneTopSeries) and not na(zoneBottomSeries)
-        color zoneColor = haveSwingUp ? upZoneColor : downZoneColor
-        int zoneStartTime = time[1]
-        int zoneEndTime = time
-        zoneTopLine := line.new(zoneStartTime, zoneTopSeries, zoneEndTime, zoneTopSeries, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
-        zoneBottomLine := line.new(zoneStartTime, zoneBottomSeries, zoneEndTime, zoneBottomSeries, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
+bool inMorning = f_is_in_session(morningSession, morningTz)
 
-if barstate.isconfirmed and showZone and not na(zoneTopSeries) and not na(zoneBottomSeries)
+var line newTop = na
+var line newBot = na
+if barstate.islast
+    [newTop, newBot] = f_draw_zone_current(zoneTopLine, zoneBottomLine, showZone and inMorning, zoneTopSeries, zoneBottomSeries, haveSwingUp, upZoneColor, downZoneColor, zoneLineWidth)
+    zoneTopLine := newTop
+    zoneBottomLine := newBot
+
+if barstate.isconfirmed and showZone and inMorning and not na(zoneTopSeries) and not na(zoneBottomSeries)
     bool changed = na(lastZoneTop) or na(lastZoneBottom) or zoneTopSeries != lastZoneTop or zoneBottomSeries != lastZoneBottom
     if changed
         color zoneColor = haveSwingUp ? upZoneColor : downZoneColor
