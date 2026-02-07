@@ -21,9 +21,15 @@ historyZones = input.int(200, "History Zones", minval=1, maxval=1000)
 upZoneColor = input.color(color.new(color.green, 0), "Up Zone Color")
 downZoneColor = input.color(color.new(color.red, 0), "Down Zone Color")
 zoneLineStyle = line.style_dashed
-morningSession = input.session("0600-1100", "Morning Session")
-morningTz = input.string("Asia/Tokyo", "Morning Timezone")
+morningSession = input.session("0800-1200", "NY Morning Session")
+morningTz = input.string("America/New_York", "NY Morning Timezone")
 showWinrate = input.bool(true, "Show Win Rate")
+showDowTrendTable = input.bool(true, "Show Dow Trend Table")
+dowTf0 = input.timeframe("5", "Dow TF 0")
+dowTf1 = input.timeframe("15", "Dow TF 1")
+dowTf2 = input.timeframe("60", "Dow TF 2")
+dowTf3 = input.timeframe("240", "Dow TF 3")
+dowTf4 = input.timeframe("D", "Dow TF 4")
 
 // === Pivot tracking (time-based) ===
 f_pivots_4h() =>
@@ -94,6 +100,17 @@ f_calc_zone(float swingLow, float swingHigh, bool isUp, float rLow, float rHigh)
             zTop := swingLow + swingRange * rLow
             zBot := swingLow + swingRange * rHigh
     [zTop, zBot]
+
+f_dow_state(float prevHigh, float lastHigh, float prevLow, float lastLow) =>
+    bool up = not na(prevHigh) and not na(lastHigh) and not na(prevLow) and not na(lastLow) and lastHigh > prevHigh and lastLow > prevLow
+    bool down = not na(prevHigh) and not na(lastHigh) and not na(prevLow) and not na(lastLow) and lastHigh < prevHigh and lastLow < prevLow
+    up ? 1 : down ? -1 : 0
+
+f_dow_label(int state) =>
+    state == 1 ? "UP" : state == -1 ? "DOWN" : "RANGE"
+
+f_dow_color(int state) =>
+    state == 1 ? color.new(color.lime, 0) : state == -1 ? color.new(color.red, 0) : color.new(color.silver, 0)
 
 f_push_zone_history(int x1, int x2, float top, float bot, color zoneColor, int w, line[] hist, int maxZones) =>
     line l1 = line.new(x1, top, x2, top, xloc=xloc.bar_time, extend=extend.none, color=zoneColor, width=w, style=zoneLineStyle)
@@ -184,6 +201,8 @@ var float entryPrice = na
 var int wins = 0
 var int losses = 0
 var int totalTrades = 0
+bool longEntryMark = false
+bool shortEntryMark = false
 
 bool bounceLong = inMorning and haveSwingUp and not na(zoneTopSeries) and not na(zoneBottomSeries) and low <= zoneTopSeries and close > zoneTopSeries
 bool bounceShort = inMorning and haveSwingDown and not na(zoneTopSeries) and not na(zoneBottomSeries) and high >= zoneBottomSeries and close < zoneBottomSeries
@@ -196,6 +215,7 @@ if not inTrade
         tpPrice := lastHighPrice
         slPrice := lastLowPrice
         totalTrades += 1
+        longEntryMark := true
     else if bounceShort and not na(lastHighPrice) and not na(lastLowPrice) and lastLowPrice < lastHighPrice
         inTrade := true
         tradeDir := -1
@@ -203,6 +223,7 @@ if not inTrade
         tpPrice := lastLowPrice
         slPrice := lastHighPrice
         totalTrades += 1
+        shortEntryMark := true
 
 if inTrade
     bool win = false
@@ -222,6 +243,37 @@ if inTrade
         losses += 1
         inTrade := false
         tradeDir := 0
+
+plotshape(longEntryMark, title="Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="L")
+plotshape(shortEntryMark, title="Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
+
+// === Dow trend table (multi-timeframe) ===
+[_, _, d0PrevLow, d0LastLow, _, _, d0PrevHigh, d0LastHigh, _, _] = request.security(syminfo.tickerid, dowTf0, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[_, _, d1PrevLow, d1LastLow, _, _, d1PrevHigh, d1LastHigh, _, _] = request.security(syminfo.tickerid, dowTf1, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[_, _, d2PrevLow, d2LastLow, _, _, d2PrevHigh, d2LastHigh, _, _] = request.security(syminfo.tickerid, dowTf2, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[_, _, d3PrevLow, d3LastLow, _, _, d3PrevHigh, d3LastHigh, _, _] = request.security(syminfo.tickerid, dowTf3, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[_, _, d4PrevLow, d4LastLow, _, _, d4PrevHigh, d4LastHigh, _, _] = request.security(syminfo.tickerid, dowTf4, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+
+int dow0 = f_dow_state(d0PrevHigh, d0LastHigh, d0PrevLow, d0LastLow)
+int dow1 = f_dow_state(d1PrevHigh, d1LastHigh, d1PrevLow, d1LastLow)
+int dow2 = f_dow_state(d2PrevHigh, d2LastHigh, d2PrevLow, d2LastLow)
+int dow3 = f_dow_state(d3PrevHigh, d3LastHigh, d3PrevLow, d3LastLow)
+int dow4 = f_dow_state(d4PrevHigh, d4LastHigh, d4PrevLow, d4LastLow)
+
+var table dowTable = table.new(position.bottom_right, 2, 6, bgcolor=color.new(color.black, 80))
+if barstate.islast and showDowTrendTable
+    table.cell(dowTable, 0, 0, "TF", text_color=color.white)
+    table.cell(dowTable, 1, 0, "Trend", text_color=color.white)
+    table.cell(dowTable, 0, 1, dowTf0, text_color=color.white)
+    table.cell(dowTable, 1, 1, f_dow_label(dow0), text_color=f_dow_color(dow0))
+    table.cell(dowTable, 0, 2, dowTf1, text_color=color.white)
+    table.cell(dowTable, 1, 2, f_dow_label(dow1), text_color=f_dow_color(dow1))
+    table.cell(dowTable, 0, 3, dowTf2, text_color=color.white)
+    table.cell(dowTable, 1, 3, f_dow_label(dow2), text_color=f_dow_color(dow2))
+    table.cell(dowTable, 0, 4, dowTf3, text_color=color.white)
+    table.cell(dowTable, 1, 4, f_dow_label(dow3), text_color=f_dow_color(dow3))
+    table.cell(dowTable, 0, 5, dowTf4, text_color=color.white)
+    table.cell(dowTable, 1, 5, f_dow_label(dow4), text_color=f_dow_color(dow4))
 
 // === Stats table ===
 var table stats = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80))
