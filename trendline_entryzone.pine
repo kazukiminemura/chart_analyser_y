@@ -34,6 +34,14 @@ dowTf2 = input.timeframe("60", "Dow TF 2")
 dowTf3 = input.timeframe("240", "Dow TF 3")
 dowTf4 = input.timeframe("D", "Dow TF 4")
 
+// === Constants ===
+DIR_NONE = 0
+DIR_LONG = 1
+DIR_SHORT = -1
+RESULT_NONE = 0
+RESULT_WIN = 1
+RESULT_LOSS = -1
+
 // === Pivot tracking (time-based) ===
 f_pivots_4h() =>
     var int lastLowTime = na
@@ -65,14 +73,6 @@ f_pivots_4h() =>
 
 [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow, newPivotHigh] = request.security(syminfo.tickerid, trendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
 
-// === Trend check (higher lows / lower highs) ===
-trendOk = not na(prevLowPrice) and not na(lastLowPrice) and lastLowPrice > prevLowPrice
-if requireHigherHighs
-    trendOk := trendOk and not na(prevHighPrice) and not na(lastHighPrice) and lastHighPrice > prevHighPrice
-trendDownOk = not na(prevHighPrice) and not na(lastHighPrice) and lastHighPrice < prevHighPrice
-if requireLowerLows
-    trendDownOk := trendDownOk and not na(prevLowPrice) and not na(lastLowPrice) and lastLowPrice < prevLowPrice
-
 var line lowTrend = na
 var line[] lowTrends = array.new_line()
 var line highTrend = na
@@ -92,19 +92,6 @@ dayMs = 24 * 60 * 60 * 1000
 f_is_in_session(string sess, string tz) =>
     not na(time(timeframe.period, sess, tz))
 
-f_calc_zone(float swingLow, float swingHigh, bool isUp, float rLow, float rHigh) =>
-    float zTop = na
-    float zBot = na
-    if not na(swingLow) and not na(swingHigh)
-        float swingRange = swingHigh - swingLow
-        if isUp
-            zTop := swingHigh - swingRange * rLow
-            zBot := swingHigh - swingRange * rHigh
-        else
-            zTop := swingLow + swingRange * rLow
-            zBot := swingLow + swingRange * rHigh
-    [zTop, zBot]
-
 f_dow_state(float prevHigh, float lastHigh, float prevLow, float lastLow) =>
     bool up = not na(prevHigh) and not na(lastHigh) and not na(prevLow) and not na(lastLow) and lastHigh > prevHigh and lastLow > prevLow
     bool down = not na(prevHigh) and not na(lastHigh) and not na(prevLow) and not na(lastLow) and lastHigh < prevHigh and lastLow < prevLow
@@ -115,6 +102,110 @@ f_dow_label(int state) =>
 
 f_dow_color(int state) =>
     state == 1 ? color.new(color.lime, 0) : state == -1 ? color.new(color.red, 0) : color.new(color.silver, 0)
+
+f_is_uptrend(float prevLow, float lastLow, bool needHigherHighs, float prevHigh, float lastHigh) =>
+    bool ok = not na(prevLow) and not na(lastLow) and lastLow > prevLow
+    if needHigherHighs
+        ok := ok and not na(prevHigh) and not na(lastHigh) and lastHigh > prevHigh
+    ok
+
+f_is_downtrend(float prevHigh, float lastHigh, bool needLowerLows, float prevLow, float lastLow) =>
+    bool ok = not na(prevHigh) and not na(lastHigh) and lastHigh < prevHigh
+    if needLowerLows
+        ok := ok and not na(prevLow) and not na(lastLow) and lastLow < prevLow
+    ok
+
+f_project_trendline(int startTime, float startPrice, int pivotTime, float pivotPrice, float lenMult, color lnColor, int w, style) =>
+    line projected = na
+    if not na(startTime) and not na(pivotTime) and startTime < pivotTime and not na(startPrice) and not na(pivotPrice)
+        float seg = pivotTime - startTime
+        int endTime = int(pivotTime + seg * lenMult)
+        float slope = (pivotPrice - startPrice) / seg
+        float endPrice = pivotPrice + slope * float(endTime - pivotTime)
+        projected := line.new(startTime, startPrice, endTime, endPrice, xloc=xloc.bar_time, extend=extend.none, color=lnColor, width=w, style=style)
+    projected
+
+f_push_recent_line(line[] hist, line ln, int maxCount) =>
+    if not na(ln)
+        array.push(hist, ln)
+    while array.size(hist) > maxCount
+        line old = array.shift(hist)
+        if not na(old)
+            line.delete(old)
+
+f_swing_dir(int lastHighT, int lastLowT, float lastHighP, float lastLowP) =>
+    bool hasData = not na(lastHighT) and not na(lastLowT) and not na(lastHighP) and not na(lastLowP)
+    hasData ? (lastHighT > lastLowT ? DIR_LONG : lastLowT > lastHighT ? DIR_SHORT : DIR_NONE) : DIR_NONE
+
+f_zone_from_swing(int swingDir, float swingLow, float swingHigh, float rLow, float rHigh) =>
+    float zTop = na
+    float zBot = na
+    if not na(swingLow) and not na(swingHigh)
+        float swingRange = swingHigh - swingLow
+        if swingDir == DIR_LONG
+            zTop := swingHigh - swingRange * rLow
+            zBot := swingHigh - swingRange * rHigh
+        else if swingDir == DIR_SHORT
+            zTop := swingLow + swingRange * rLow
+            zBot := swingLow + swingRange * rHigh
+    [zTop, zBot]
+
+f_price_in_zone(float price, float top, float bot) =>
+    bool inZone = false
+    if not na(price) and not na(top) and not na(bot)
+        float lower = math.min(top, bot)
+        float upper = math.max(top, bot)
+        inZone := price >= lower and price <= upper
+    inZone
+
+f_pivot_in_zone(float pivotPrice, bool swingOk, float zoneTopAtPivot, float zoneBottomAtPivot) =>
+    swingOk and not na(pivotPrice) and f_price_in_zone(pivotPrice, zoneTopAtPivot, zoneBottomAtPivot)
+
+f_entry_signal(bool longSignal, bool shortSignal, bool closeInZone) =>
+    closeInZone ? (longSignal ? DIR_LONG : shortSignal ? DIR_SHORT : DIR_NONE) : DIR_NONE
+
+f_trade_levels(int dir, float swingHigh, float swingLow) =>
+    float tp = na
+    float sl = na
+    bool valid = false
+    if dir == DIR_LONG and not na(swingHigh) and not na(swingLow) and swingHigh > swingLow
+        tp := swingHigh
+        sl := swingLow
+        valid := true
+    else if dir == DIR_SHORT and not na(swingHigh) and not na(swingLow) and swingLow < swingHigh
+        tp := swingLow
+        sl := swingHigh
+        valid := true
+    [tp, sl, valid]
+
+f_trade_result(int dir, float tp, float sl) =>
+    int result = RESULT_NONE
+    if dir == DIR_LONG
+        bool win = high >= tp
+        bool loss = low <= sl and not win
+        result := win ? RESULT_WIN : loss ? RESULT_LOSS : RESULT_NONE
+    else if dir == DIR_SHORT
+        bool win = low <= tp
+        bool loss = high >= sl and not win
+        result := win ? RESULT_WIN : loss ? RESULT_LOSS : RESULT_NONE
+    result
+
+f_count_wins_losses(int[] results) =>
+    int wins = 0
+    int losses = 0
+    int n = array.size(results)
+    if n > 0
+        for i = 0 to n - 1
+            int r = array.get(results, i)
+            if r == RESULT_WIN
+                wins += 1
+            else if r == RESULT_LOSS
+                losses += 1
+    [wins, losses]
+
+f_set_dow_row(table t, int row, string tf, int state) =>
+    table.cell(t, 0, row, tf, text_color=color.white)
+    table.cell(t, 1, row, f_dow_label(state), text_color=f_dow_color(state))
 
 f_push_zone_history(int x1, int x2, float top, float bot, color zoneColor, int w, line[] hist, int maxZones) =>
     line l1 = line.new(x1, top, x2, top, xloc=xloc.bar_time, extend=extend.none, color=zoneColor, width=w, style=zoneLineStyle)
@@ -141,46 +232,25 @@ f_draw_zone_current(line prevTop, line prevBot, bool showNow, float top, float b
         newBot := line.new(zoneStartTime, bot, zoneEndTime, bot, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=w, style=zoneLineStyle)
     [newTop, newBot]
 
-if newPivotLow and trendOk and not na(prevLowTime) and not na(lastLowTime) and prevLowTime < lastLowTime
-    float seg = lastLowTime - prevLowTime
-    int endTime = int(lastLowTime + seg * lengthMult)
-    float slopeT = (lastLowPrice - prevLowPrice) / seg
-    float endPrice = lastLowPrice + slopeT * float(endTime - lastLowTime)
-    lowTrend := line.new(prevLowTime, prevLowPrice, endTime, endPrice, xloc=xloc.bar_time, extend=extend.none, color=lineColor, width=lineWidth, style=lineStyle)
-    array.push(lowTrends, lowTrend)
-    if array.size(lowTrends) > maxLines
-        line.delete(array.shift(lowTrends))
+// === Trend check (higher lows / lower highs) ===
+trendOk = f_is_uptrend(prevLowPrice, lastLowPrice, requireHigherHighs, prevHighPrice, lastHighPrice)
+trendDownOk = f_is_downtrend(prevHighPrice, lastHighPrice, requireLowerLows, prevLowPrice, lastLowPrice)
 
-if newPivotHigh and trendDownOk and not na(prevHighTime) and not na(lastHighTime) and prevHighTime < lastHighTime
-    float segH = lastHighTime - prevHighTime
-    int endTimeH = int(lastHighTime + segH * lengthMult)
-    float slopeH = (lastHighPrice - prevHighPrice) / segH
-    float endPriceH = lastHighPrice + slopeH * float(endTimeH - lastHighTime)
-    highTrend := line.new(prevHighTime, prevHighPrice, endTimeH, endPriceH, xloc=xloc.bar_time, extend=extend.none, color=downLineColor, width=lineWidth, style=lineStyle)
-    array.push(highTrends, highTrend)
-    if array.size(highTrends) > maxLines
-        line.delete(array.shift(highTrends))
+if newPivotLow and trendOk
+    lowTrend := f_project_trendline(prevLowTime, prevLowPrice, lastLowTime, lastLowPrice, lengthMult, lineColor, lineWidth, lineStyle)
+    f_push_recent_line(lowTrends, lowTrend, maxLines)
 
-bool haveSwingUp = not na(lastHighTime) and not na(lastLowTime) and lastHighTime > lastLowTime and not na(lastHighPrice) and not na(lastLowPrice)
-bool haveSwingDown = not na(lastHighTime) and not na(lastLowTime) and lastLowTime > lastHighTime and not na(lastHighPrice) and not na(lastLowPrice)
+if newPivotHigh and trendDownOk
+    highTrend := f_project_trendline(prevHighTime, prevHighPrice, lastHighTime, lastHighPrice, lengthMult, downLineColor, lineWidth, lineStyle)
+    f_push_recent_line(highTrends, highTrend, maxLines)
 
-float zoneTopSeries = na
-float zoneBottomSeries = na
-float zoneTopTmp = na
-float zoneBottomTmp = na
-if haveSwingUp
-    [zoneTopTmp, zoneBottomTmp] = f_calc_zone(lastLowPrice, lastHighPrice, true, lowRatio, highRatio)
-    zoneTopSeries := zoneTopTmp
-    zoneBottomSeries := zoneBottomTmp
-else if haveSwingDown
-    [zoneTopTmp, zoneBottomTmp] = f_calc_zone(lastLowPrice, lastHighPrice, false, lowRatio, highRatio)
-    zoneTopSeries := zoneTopTmp
-    zoneBottomSeries := zoneBottomTmp
+int swingDir = f_swing_dir(lastHighTime, lastLowTime, lastHighPrice, lastLowPrice)
+bool haveSwingUp = swingDir == DIR_LONG
+bool haveSwingDown = swingDir == DIR_SHORT
+[zoneTopSeries, zoneBottomSeries] = f_zone_from_swing(swingDir, lastLowPrice, lastHighPrice, lowRatio, highRatio)
 
 bool inMorning = f_is_in_session(morningSession, morningTz)
 
-var line newTop = na
-var line newBot = na
 if barstate.islast
     [newTop, newBot] = f_draw_zone_current(zoneTopLine, zoneBottomLine, showZone and inMorning, zoneTopSeries, zoneBottomSeries, haveSwingUp, upZoneColor, downZoneColor, zoneLineWidth)
     zoneTopLine := newTop
@@ -206,61 +276,45 @@ if barstate.isconfirmed and showZone and inMorning and not na(zoneTopSeries) and
         lastZoneTop := zoneTopSeries
         lastZoneBottom := zoneBottomSeries
 
-// === Entry + Winrate (bounce in zone, TP at prior high/low) ===
+// === Entry + Winrate (pivot in zone, TP at prior high/low) ===
 var bool inTrade = false
-var int tradeDir = 0
+var int tradeDir = DIR_NONE
 var float tpPrice = na
 var float slPrice = na
 var float entryPrice = na
-var int[] closedTradeResults = array.new_int()  // 1=win, -1=loss
+var int[] closedTradeResults = array.new_int()  // RESULT_WIN / RESULT_LOSS
 bool longEntryMark = false
 bool shortEntryMark = false
 
 float entryPivotLow = ta.pivotlow(low, pivotLen, pivotLen)
 float entryPivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
-float zoneUpperAtPivot = math.max(zoneTopSeries[pivotLen], zoneBottomSeries[pivotLen])
-float zoneLowerAtPivot = math.min(zoneTopSeries[pivotLen], zoneBottomSeries[pivotLen])
-float zoneUpperNow = math.max(zoneTopSeries, zoneBottomSeries)
-float zoneLowerNow = math.min(zoneTopSeries, zoneBottomSeries)
+float zoneTopAtPivot = zoneTopSeries[pivotLen]
+float zoneBottomAtPivot = zoneBottomSeries[pivotLen]
+bool pivotLongInZone = f_pivot_in_zone(entryPivotLow, haveSwingUp[pivotLen], zoneTopAtPivot, zoneBottomAtPivot)
+bool pivotShortInZone = f_pivot_in_zone(entryPivotHigh, haveSwingDown[pivotLen], zoneTopAtPivot, zoneBottomAtPivot)
+bool closeInEntryZoneNow = f_price_in_zone(close, zoneTopSeries, zoneBottomSeries)
+int entrySignalDir = f_entry_signal(pivotLongInZone, pivotShortInZone, closeInEntryZoneNow)
 
-bool pivotLongInZone = not na(entryPivotLow) and haveSwingUp[pivotLen] and not na(zoneTopSeries[pivotLen]) and not na(zoneBottomSeries[pivotLen]) and entryPivotLow >= zoneLowerAtPivot and entryPivotLow <= zoneUpperAtPivot
-bool pivotShortInZone = not na(entryPivotHigh) and haveSwingDown[pivotLen] and not na(zoneTopSeries[pivotLen]) and not na(zoneBottomSeries[pivotLen]) and entryPivotHigh >= zoneLowerAtPivot and entryPivotHigh <= zoneUpperAtPivot
-bool closeInEntryZoneNow = not na(zoneTopSeries) and not na(zoneBottomSeries) and close >= zoneLowerNow and close <= zoneUpperNow
-
-if not inTrade
-    if pivotLongInZone and closeInEntryZoneNow and not na(lastHighPrice) and not na(lastLowPrice) and lastHighPrice > lastLowPrice
+if not inTrade and entrySignalDir != DIR_NONE
+    [nextTp, nextSl, canOpenTrade] = f_trade_levels(entrySignalDir, lastHighPrice, lastLowPrice)
+    if canOpenTrade
         inTrade := true
-        tradeDir := 1
+        tradeDir := entrySignalDir
         entryPrice := close
-        tpPrice := lastHighPrice
-        slPrice := lastLowPrice
-        longEntryMark := true
-    else if pivotShortInZone and closeInEntryZoneNow and not na(lastHighPrice) and not na(lastLowPrice) and lastLowPrice < lastHighPrice
-        inTrade := true
-        tradeDir := -1
-        entryPrice := close
-        tpPrice := lastLowPrice
-        slPrice := lastHighPrice
-        shortEntryMark := true
+        tpPrice := nextTp
+        slPrice := nextSl
+        longEntryMark := entrySignalDir == DIR_LONG
+        shortEntryMark := entrySignalDir == DIR_SHORT
 
 if inTrade
-    bool win = false
-    bool loss = false
-    if tradeDir == 1
-        win := high >= tpPrice
-        loss := low <= slPrice and not win
-    else if tradeDir == -1
-        win := low <= tpPrice
-        loss := high >= slPrice and not win
-
-    if win
-        array.push(closedTradeResults, 1)
+    int result = f_trade_result(tradeDir, tpPrice, slPrice)
+    if result != RESULT_NONE
+        array.push(closedTradeResults, result)
         inTrade := false
-        tradeDir := 0
-    else if loss
-        array.push(closedTradeResults, -1)
-        inTrade := false
-        tradeDir := 0
+        tradeDir := DIR_NONE
+        tpPrice := na
+        slPrice := na
+        entryPrice := na
 
 plotshape(longEntryMark, title="Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="L")
 plotshape(shortEntryMark, title="Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
@@ -282,30 +336,16 @@ var table dowTable = table.new(position.bottom_right, 2, 6, bgcolor=color.new(co
 if barstate.islast and showDowTrendTable
     table.cell(dowTable, 0, 0, "TF", text_color=color.white)
     table.cell(dowTable, 1, 0, "Trend", text_color=color.white)
-    table.cell(dowTable, 0, 1, dowTf0, text_color=color.white)
-    table.cell(dowTable, 1, 1, f_dow_label(dow0), text_color=f_dow_color(dow0))
-    table.cell(dowTable, 0, 2, dowTf1, text_color=color.white)
-    table.cell(dowTable, 1, 2, f_dow_label(dow1), text_color=f_dow_color(dow1))
-    table.cell(dowTable, 0, 3, dowTf2, text_color=color.white)
-    table.cell(dowTable, 1, 3, f_dow_label(dow2), text_color=f_dow_color(dow2))
-    table.cell(dowTable, 0, 4, dowTf3, text_color=color.white)
-    table.cell(dowTable, 1, 4, f_dow_label(dow3), text_color=f_dow_color(dow3))
-    table.cell(dowTable, 0, 5, dowTf4, text_color=color.white)
-    table.cell(dowTable, 1, 5, f_dow_label(dow4), text_color=f_dow_color(dow4))
+    f_set_dow_row(dowTable, 1, dowTf0, dow0)
+    f_set_dow_row(dowTable, 2, dowTf1, dow1)
+    f_set_dow_row(dowTable, 3, dowTf2, dow2)
+    f_set_dow_row(dowTable, 4, dowTf3, dow3)
+    f_set_dow_row(dowTable, 5, dowTf4, dow4)
 
 // === Stats table ===
 var table stats = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80))
 if barstate.islast and showWinrate
-    int wins = 0
-    int losses = 0
-    int resultsCount = array.size(closedTradeResults)
-    if resultsCount > 0
-        for i = 0 to resultsCount - 1
-            int r = array.get(closedTradeResults, i)
-            if r == 1
-                wins += 1
-            else if r == -1
-                losses += 1
+    [wins, losses] = f_count_wins_losses(closedTradeResults)
     int total = wins + losses
     float winrate = total > 0 ? wins * 100.0 / total : na
     table.cell(stats, 0, 0, "Win Rate (Loaded Candles)", text_color=color.white)
