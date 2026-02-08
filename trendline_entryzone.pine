@@ -20,9 +20,12 @@ zoneLineWidth = input.int(2, "Zone Line Width", minval=1, maxval=5)
 historyZones = input.int(200, "History Zones", minval=1, maxval=1000)
 upZoneColor = input.color(color.new(color.green, 0), "Up Zone Color")
 downZoneColor = input.color(color.new(color.red, 0), "Down Zone Color")
+showZoneRefCandles = input.bool(true, "Show Zone Reference Candles")
+zoneRefLongColor = input.color(color.new(color.green, 0), "Zone Ref Line Color (Long)")
+zoneRefShortColor = input.color(color.new(color.red, 0), "Zone Ref Line Color (Short)")
 zoneLineStyle = line.style_dashed
-morningSession = input.session("0800-1200", "NY Morning Session")
-morningTz = input.string("America/New_York", "NY Morning Timezone")
+morningSession = input.session("0800-1200", "Tokyo Morning Session")
+morningTz = input.string("Asia/Tokyo", "Tokyo Morning Timezone")
 showWinrate = input.bool(true, "Show Win Rate")
 showDowTrendTable = input.bool(true, "Show Dow Trend Table")
 dowTf0 = input.timeframe("5", "Dow TF 0")
@@ -81,6 +84,7 @@ highRatio = math.max(zoneRatio1, zoneRatio2)
 var line zoneTopLine = na
 var line zoneBottomLine = na
 var line[] zoneHistory = array.new_line()
+var line[] zoneRefHistory = array.new_line()
 var float lastZoneTop = na
 var float lastZoneBottom = na
 dayMs = 24 * 60 * 60 * 1000
@@ -189,6 +193,16 @@ if barstate.isconfirmed and showZone and inMorning and not na(zoneTopSeries) and
         int x1 = time
         int x2 = time + dayMs
         f_push_zone_history(x1, x2, zoneTopSeries, zoneBottomSeries, zoneColor, zoneLineWidth, zoneHistory, historyZones)
+        if showZoneRefCandles and not na(lastLowTime) and not na(lastHighTime) and not na(lastLowPrice) and not na(lastHighPrice)
+            color refLineColor = haveSwingUp ? zoneRefLongColor : zoneRefShortColor
+            line refLowPivot = line.new(lastLowTime, lastLowPrice, x2, lastLowPrice, xloc=xloc.bar_time, extend=extend.none, color=refLineColor, width=2, style=line.style_dotted)
+            line refHighPivot = line.new(lastHighTime, lastHighPrice, x2, lastHighPrice, xloc=xloc.bar_time, extend=extend.none, color=refLineColor, width=2, style=line.style_dotted)
+            array.push(zoneRefHistory, refLowPivot)
+            array.push(zoneRefHistory, refHighPivot)
+            while array.size(zoneRefHistory) > historyZones * 2
+                line oldRef = array.shift(zoneRefHistory)
+                if not na(oldRef)
+                    line.delete(oldRef)
         lastZoneTop := zoneTopSeries
         lastZoneBottom := zoneBottomSeries
 
