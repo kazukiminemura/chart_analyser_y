@@ -27,7 +27,6 @@ zoneLineStyle = line.style_dashed
 morningSession = input.session("0800-1200", "Tokyo Morning Session")
 morningTz = input.string("Asia/Tokyo", "Tokyo Morning Timezone")
 showWinrate = input.bool(true, "Show Win Rate")
-winrateLookbackDays = input.int(365, "Win Rate Lookback Days", minval=1, maxval=5000)
 showDowTrendTable = input.bool(true, "Show Dow Trend Table")
 dowTf0 = input.timeframe("5", "Dow TF 0")
 dowTf1 = input.timeframe("15", "Dow TF 1")
@@ -213,23 +212,30 @@ var int tradeDir = 0
 var float tpPrice = na
 var float slPrice = na
 var float entryPrice = na
-var int[] closedTradeTimes = array.new_int()
 var int[] closedTradeResults = array.new_int()  // 1=win, -1=loss
 bool longEntryMark = false
 bool shortEntryMark = false
 
-bool bounceLong = inMorning and haveSwingUp and not na(zoneTopSeries) and not na(zoneBottomSeries) and low <= zoneTopSeries and close > zoneTopSeries
-bool bounceShort = inMorning and haveSwingDown and not na(zoneTopSeries) and not na(zoneBottomSeries) and high >= zoneBottomSeries and close < zoneBottomSeries
+float entryPivotLow = ta.pivotlow(low, pivotLen, pivotLen)
+float entryPivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+float zoneUpperAtPivot = math.max(zoneTopSeries[pivotLen], zoneBottomSeries[pivotLen])
+float zoneLowerAtPivot = math.min(zoneTopSeries[pivotLen], zoneBottomSeries[pivotLen])
+float zoneUpperNow = math.max(zoneTopSeries, zoneBottomSeries)
+float zoneLowerNow = math.min(zoneTopSeries, zoneBottomSeries)
+
+bool pivotLongInZone = not na(entryPivotLow) and haveSwingUp[pivotLen] and not na(zoneTopSeries[pivotLen]) and not na(zoneBottomSeries[pivotLen]) and entryPivotLow >= zoneLowerAtPivot and entryPivotLow <= zoneUpperAtPivot
+bool pivotShortInZone = not na(entryPivotHigh) and haveSwingDown[pivotLen] and not na(zoneTopSeries[pivotLen]) and not na(zoneBottomSeries[pivotLen]) and entryPivotHigh >= zoneLowerAtPivot and entryPivotHigh <= zoneUpperAtPivot
+bool closeInEntryZoneNow = not na(zoneTopSeries) and not na(zoneBottomSeries) and close >= zoneLowerNow and close <= zoneUpperNow
 
 if not inTrade
-    if bounceLong and not na(lastHighPrice) and not na(lastLowPrice) and lastHighPrice > lastLowPrice
+    if pivotLongInZone and closeInEntryZoneNow and not na(lastHighPrice) and not na(lastLowPrice) and lastHighPrice > lastLowPrice
         inTrade := true
         tradeDir := 1
         entryPrice := close
         tpPrice := lastHighPrice
         slPrice := lastLowPrice
         longEntryMark := true
-    else if bounceShort and not na(lastHighPrice) and not na(lastLowPrice) and lastLowPrice < lastHighPrice
+    else if pivotShortInZone and closeInEntryZoneNow and not na(lastHighPrice) and not na(lastLowPrice) and lastLowPrice < lastHighPrice
         inTrade := true
         tradeDir := -1
         entryPrice := close
@@ -248,25 +254,13 @@ if inTrade
         loss := high >= slPrice and not win
 
     if win
-        array.push(closedTradeTimes, time)
         array.push(closedTradeResults, 1)
         inTrade := false
         tradeDir := 0
     else if loss
-        array.push(closedTradeTimes, time)
         array.push(closedTradeResults, -1)
         inTrade := false
         tradeDir := 0
-
-int lookbackMs = winrateLookbackDays * dayMs
-int cutoffTime = time - lookbackMs
-while array.size(closedTradeTimes) > 0
-    int oldestTime = array.get(closedTradeTimes, 0)
-    if oldestTime < cutoffTime
-        array.shift(closedTradeTimes)
-        array.shift(closedTradeResults)
-    else
-        break
 
 plotshape(longEntryMark, title="Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="L")
 plotshape(shortEntryMark, title="Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
@@ -314,7 +308,7 @@ if barstate.islast and showWinrate
                 losses += 1
     int total = wins + losses
     float winrate = total > 0 ? wins * 100.0 / total : na
-    table.cell(stats, 0, 0, str.format("Win Rate ({0}d)", winrateLookbackDays), text_color=color.white)
+    table.cell(stats, 0, 0, "Win Rate (Loaded Candles)", text_color=color.white)
     table.cell(stats, 1, 0, total > 0 ? str.format("{0,number,#.##}%", winrate) : "N/A", text_color=color.white)
     table.cell(stats, 0, 1, "W/L", text_color=color.white)
     table.cell(stats, 1, 1, str.format("{0}/{1}", wins, losses), text_color=color.white)
