@@ -4,11 +4,17 @@ indicator("Trendline (Lows, 1H)", overlay=true, max_lines_count=200)
 // === Inputs ===
 pivotLen = input.int(4, "Pivot Length", minval=1)
 trendTf = input.timeframe("60", "Trend Timeframe (1H)")
+showH4Trendlines = input.bool(true, "Show H4 Trendlines")
+showDailyTrendlines = input.bool(true, "Show Daily Trendlines")
 requireHigherHighs = input.bool(true, "Require Higher Highs (Uptrend)")
 requireLowerLows = input.bool(true, "Require Lower Lows (Downtrend)")
 maxLines = input.int(10, "Max Recent Trendlines", minval=1, maxval=50)
 lineColor = input.color(color.new(color.teal, 0), "Line Color")
 downLineColor = input.color(color.new(color.orange, 0), "Downtrend Line Color")
+h4UpLineColor = input.color(color.new(color.blue, 0), "H4 Uptrend Line Color")
+h4DownLineColor = input.color(color.new(color.yellow, 0), "H4 Downtrend Line Color")
+dailyUpLineColor = input.color(color.new(color.aqua, 0), "Daily Uptrend Line Color")
+dailyDownLineColor = input.color(color.new(color.fuchsia, 0), "Daily Downtrend Line Color")
 lineWidth = input.int(2, "Line Width", minval=1, maxval=4)
 lineStyleOpt = input.string("Solid", "Line Style", options=["Solid", "Dashed", "Dotted"])
 lineStyle = lineStyleOpt == "Dashed" ? line.style_dashed : lineStyleOpt == "Dotted" ? line.style_dotted : line.style_solid
@@ -72,11 +78,21 @@ f_pivots_4h() =>
     [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, not na(pl), not na(ph)]
 
 [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow, newPivotHigh] = request.security(syminfo.tickerid, trendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[h4PrevLowTime, h4LastLowTime, h4PrevLowPrice, h4LastLowPrice, h4PrevHighTime, h4LastHighTime, h4PrevHighPrice, h4LastHighPrice, h4NewPivotLow, h4NewPivotHigh] = request.security(syminfo.tickerid, "240", f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[dPrevLowTime, dLastLowTime, dPrevLowPrice, dLastLowPrice, dPrevHighTime, dLastHighTime, dPrevHighPrice, dLastHighPrice, dNewPivotLow, dNewPivotHigh] = request.security(syminfo.tickerid, "D", f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
 
 var line lowTrend = na
 var line[] lowTrends = array.new_line()
 var line highTrend = na
 var line[] highTrends = array.new_line()
+var line h4LowTrend = na
+var line[] h4LowTrends = array.new_line()
+var line h4HighTrend = na
+var line[] h4HighTrends = array.new_line()
+var line dLowTrend = na
+var line[] dLowTrends = array.new_line()
+var line dHighTrend = na
+var line[] dHighTrends = array.new_line()
 
 // === Zone helpers ===
 lowRatio = math.min(zoneRatio1, zoneRatio2)
@@ -235,6 +251,10 @@ f_draw_zone_current(line prevTop, line prevBot, bool showNow, float top, float b
 // === Trend check (higher lows / lower highs) ===
 trendOk = f_is_uptrend(prevLowPrice, lastLowPrice, requireHigherHighs, prevHighPrice, lastHighPrice)
 trendDownOk = f_is_downtrend(prevHighPrice, lastHighPrice, requireLowerLows, prevLowPrice, lastLowPrice)
+h4TrendOk = f_is_uptrend(h4PrevLowPrice, h4LastLowPrice, requireHigherHighs, h4PrevHighPrice, h4LastHighPrice)
+h4TrendDownOk = f_is_downtrend(h4PrevHighPrice, h4LastHighPrice, requireLowerLows, h4PrevLowPrice, h4LastLowPrice)
+dTrendOk = f_is_uptrend(dPrevLowPrice, dLastLowPrice, requireHigherHighs, dPrevHighPrice, dLastHighPrice)
+dTrendDownOk = f_is_downtrend(dPrevHighPrice, dLastHighPrice, requireLowerLows, dPrevLowPrice, dLastLowPrice)
 
 if newPivotLow and trendOk
     lowTrend := f_project_trendline(prevLowTime, prevLowPrice, lastLowTime, lastLowPrice, lengthMult, lineColor, lineWidth, lineStyle)
@@ -243,6 +263,22 @@ if newPivotLow and trendOk
 if newPivotHigh and trendDownOk
     highTrend := f_project_trendline(prevHighTime, prevHighPrice, lastHighTime, lastHighPrice, lengthMult, downLineColor, lineWidth, lineStyle)
     f_push_recent_line(highTrends, highTrend, maxLines)
+
+if showH4Trendlines and h4NewPivotLow and h4TrendOk
+    h4LowTrend := f_project_trendline(h4PrevLowTime, h4PrevLowPrice, h4LastLowTime, h4LastLowPrice, lengthMult, h4UpLineColor, lineWidth, lineStyle)
+    f_push_recent_line(h4LowTrends, h4LowTrend, maxLines)
+
+if showH4Trendlines and h4NewPivotHigh and h4TrendDownOk
+    h4HighTrend := f_project_trendline(h4PrevHighTime, h4PrevHighPrice, h4LastHighTime, h4LastHighPrice, lengthMult, h4DownLineColor, lineWidth, lineStyle)
+    f_push_recent_line(h4HighTrends, h4HighTrend, maxLines)
+
+if showDailyTrendlines and dNewPivotLow and dTrendOk
+    dLowTrend := f_project_trendline(dPrevLowTime, dPrevLowPrice, dLastLowTime, dLastLowPrice, lengthMult, dailyUpLineColor, lineWidth, lineStyle)
+    f_push_recent_line(dLowTrends, dLowTrend, maxLines)
+
+if showDailyTrendlines and dNewPivotHigh and dTrendDownOk
+    dHighTrend := f_project_trendline(dPrevHighTime, dPrevHighPrice, dLastHighTime, dLastHighPrice, lengthMult, dailyDownLineColor, lineWidth, lineStyle)
+    f_push_recent_line(dHighTrends, dHighTrend, maxLines)
 
 int swingDir = f_swing_dir(lastHighTime, lastLowTime, lastHighPrice, lastLowPrice)
 bool haveSwingUp = swingDir == DIR_LONG
