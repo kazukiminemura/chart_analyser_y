@@ -34,6 +34,8 @@ morningSession = input.session("0800-1200", "Tokyo Morning Session")
 morningTz = input.string("Asia/Tokyo", "Tokyo Morning Timezone")
 showWinrate = input.bool(true, "Show Win Rate")
 showDowTrendTable = input.bool(true, "Show Dow Trend Table")
+showScenarioTable = input.bool(true, "Show Scenario Text")
+scenarioPositionOpt = input.string("Top Left", "Scenario Position", options=["Top Left", "Top Center", "Top Right", "Bottom Left", "Bottom Center", "Bottom Right"])
 dowTf0 = input.timeframe("5", "Dow TF 0")
 dowTf1 = input.timeframe("15", "Dow TF 1")
 dowTf2 = input.timeframe("60", "Dow TF 2")
@@ -118,6 +120,12 @@ f_dow_label(int state) =>
 
 f_dow_color(int state) =>
     state == 1 ? color.new(color.lime, 0) : state == -1 ? color.new(color.red, 0) : color.new(color.silver, 0)
+
+f_bias_label(int dState, int h4State) =>
+    dState == 1 and h4State == 1 ? "BULLISH" : dState == -1 and h4State == -1 ? "BEARISH" : "NEUTRAL"
+
+f_zone_label(bool inZone) =>
+    inZone ? "IN ZONE" : "OUT OF ZONE"
 
 f_is_uptrend(float prevLow, float lastLow, bool needHigherHighs, float prevHigh, float lastHigh) =>
     bool ok = not na(prevLow) and not na(lastLow) and lastLow > prevLow
@@ -367,6 +375,9 @@ int dow1 = f_dow_state(d1PrevHigh, d1LastHigh, d1PrevLow, d1LastLow)
 int dow2 = f_dow_state(d2PrevHigh, d2LastHigh, d2PrevLow, d2LastLow)
 int dow3 = f_dow_state(d3PrevHigh, d3LastHigh, d3PrevLow, d3LastLow)
 int dow4 = f_dow_state(d4PrevHigh, d4LastHigh, d4PrevLow, d4LastLow)
+int trend1h = f_dow_state(prevHighPrice, lastHighPrice, prevLowPrice, lastLowPrice)
+int trend4h = f_dow_state(h4PrevHighPrice, h4LastHighPrice, h4PrevLowPrice, h4LastLowPrice)
+int trendD = f_dow_state(dPrevHighPrice, dLastHighPrice, dPrevLowPrice, dLastLowPrice)
 
 var table dowTable = table.new(position.bottom_right, 2, 6, bgcolor=color.new(color.black, 80))
 if barstate.islast and showDowTrendTable
@@ -377,6 +388,23 @@ if barstate.islast and showDowTrendTable
     f_set_dow_row(dowTable, 3, dowTf2, dow2)
     f_set_dow_row(dowTable, 4, dowTf3, dow3)
     f_set_dow_row(dowTable, 5, dowTf4, dow4)
+
+scenarioPos = scenarioPositionOpt == "Top Left" ? position.top_left : scenarioPositionOpt == "Top Center" ? position.top_center : scenarioPositionOpt == "Top Right" ? position.top_right : scenarioPositionOpt == "Bottom Left" ? position.bottom_left : scenarioPositionOpt == "Bottom Center" ? position.bottom_center : position.bottom_right
+var table scenarioTable = table.new(scenarioPos, 1, 7, bgcolor=color.new(color.black, 80))
+if barstate.islast and showScenarioTable
+    string marketBias = f_bias_label(trendD, trend4h)
+    bool longAligned = trendD == 1 and trend4h == 1 and trend1h != -1
+    bool shortAligned = trendD == -1 and trend4h == -1 and trend1h != 1
+    string longPlan = longAligned ? (closeInEntryZoneNow ? "LONG: zone rebound setup. Trigger on bullish break." : "LONG: wait for pullback into entry zone.") : "LONG: lower priority."
+    string shortPlan = shortAligned ? (closeInEntryZoneNow ? "SHORT: zone rejection setup. Trigger on bearish break." : "SHORT: wait for rally into entry zone.") : "SHORT: lower priority."
+    string riskLine = longAligned and shortAligned ? "RISK: mixed signal, reduce size." : longAligned ? "RISK: invalidate below recent swing low." : shortAligned ? "RISK: invalidate above recent swing high." : "RISK: no edge, stay selective."
+    table.cell(scenarioTable, 0, 0, "Scenario", text_color=color.white)
+    table.cell(scenarioTable, 0, 1, str.format("Bias: {0}", marketBias), text_color=color.white)
+    table.cell(scenarioTable, 0, 2, str.format("Trend D/H4/1H: {0}/{1}/{2}", f_dow_label(trendD), f_dow_label(trend4h), f_dow_label(trend1h)), text_color=color.white)
+    table.cell(scenarioTable, 0, 3, str.format("Zone: {0}", f_zone_label(closeInEntryZoneNow)), text_color=color.white)
+    table.cell(scenarioTable, 0, 4, longPlan, text_color=color.new(color.lime, 0))
+    table.cell(scenarioTable, 0, 5, shortPlan, text_color=color.new(color.red, 0))
+    table.cell(scenarioTable, 0, 6, riskLine, text_color=color.new(color.yellow, 0))
 
 // === Stats table ===
 var table stats = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80))
