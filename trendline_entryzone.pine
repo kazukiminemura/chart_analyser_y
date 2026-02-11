@@ -41,6 +41,12 @@ dowTf1 = input.timeframe("15", "Dow TF 1")
 dowTf2 = input.timeframe("60", "Dow TF 2")
 dowTf3 = input.timeframe("240", "Dow TF 3")
 dowTf4 = input.timeframe("D", "Dow TF 4")
+yosugaReversalBars = input.int(200, "Yosuga: Max Bars After Reversal", minval=5, maxval=1000)
+yosugaBreakBufferTicks = input.int(0, "Yosuga: Break Buffer (Ticks)", minval=0, maxval=20)
+yosugaRequireZone = input.bool(true, "Yosuga: Require Pullback In Zone")
+yosugaRequireRecentReversal = input.bool(false, "Yosuga: Require Recent Reversal")
+yosugaRequireHtfAlign = input.bool(false, "Yosuga: Require D/H4 Alignment")
+showEntryCandidates = input.bool(true, "Show All Entry Candidates")
 
 // === Constants ===
 DIR_NONE = 0
@@ -140,13 +146,14 @@ f_momentum_state(float prevHigh, float lastHigh, float prevLow, float lastLow) =
         bool lowerLow = lastLow < prevLow
         bool oneSideUp = higherHigh and higherLow
         bool oneSideDown = lowerHigh and lowerLow
-        bool failedHighBreak = lowerHigh and higherLow
-        bool failedLowBreak = higherHigh and lowerLow
-        state := oneSideUp or oneSideDown ? MOMENTUM_ACCEL : failedHighBreak or failedLowBreak ? MOMENTUM_DECEL : MOMENTUM_NEUTRAL
+        // Principle:
+        // Accelerating only when both pivots keep moving in one direction.
+        // Any failure to keep that structure (including range/mixed swings) is decelerating.
+        state := oneSideUp or oneSideDown ? MOMENTUM_ACCEL : MOMENTUM_DECEL
     state
 
 f_momentum_label(int state) =>
-    state == MOMENTUM_ACCEL ? "加速" : state == MOMENTUM_DECEL ? "減速" : "中立"
+    state == MOMENTUM_ACCEL ? "ACCEL" : state == MOMENTUM_DECEL ? "DECEL" : "NEUTRAL"
 
 f_momentum_color(int state) =>
     state == MOMENTUM_ACCEL ? color.new(color.lime, 0) : state == MOMENTUM_DECEL ? color.new(color.orange, 0) : color.new(color.silver, 0)
@@ -209,8 +216,37 @@ f_price_in_zone(float price, float top, float bot) =>
 f_pivot_in_zone(float pivotPrice, bool swingOk, float zoneTopAtPivot, float zoneBottomAtPivot) =>
     swingOk and not na(pivotPrice) and f_price_in_zone(pivotPrice, zoneTopAtPivot, zoneBottomAtPivot)
 
-f_entry_signal(bool longSignal, bool shortSignal, bool closeInZone) =>
-    closeInZone ? (longSignal ? DIR_LONG : shortSignal ? DIR_SHORT : DIR_NONE) : DIR_NONE
+f_recent_reversal_ok(bool reversalSignal, int maxBars, bool requireRecent) =>
+    int barsSinceReversal = ta.barssince(reversalSignal)
+    bool isRecent = not na(barsSinceReversal) and barsSinceReversal <= maxBars
+    requireRecent ? isRecent : true
+
+f_htf_alignment_ok(int dir, int dState, int h4State, bool requireAlign) =>
+    if not requireAlign
+        true
+    else
+        dir == DIR_LONG ? (dState != -1 and h4State != -1) : dir == DIR_SHORT ? (dState != 1 and h4State != 1) : false
+
+f_zone_gate_ok(bool requireZone, bool pivotInZone, float pivotValue) =>
+    requireZone ? pivotInZone : not na(pivotValue)
+
+f_break_price(int dir, float pivotHigh, float pivotLow, int bufferTicks) =>
+    float price = na
+    if dir == DIR_LONG and not na(pivotHigh)
+        price := pivotHigh + syminfo.mintick * bufferTicks
+    else if dir == DIR_SHORT and not na(pivotLow)
+        price := pivotLow - syminfo.mintick * bufferTicks
+    price
+
+f_break_confirmed(int dir, float breakPrice) =>
+    not na(breakPrice) and (dir == DIR_LONG ? high >= breakPrice : dir == DIR_SHORT ? low <= breakPrice : false)
+
+f_side_structure_ok(int dir, int trend1hState, bool recentOk, bool htfOk) =>
+    dir == DIR_LONG ? trend1hState == 1 and recentOk and htfOk : dir == DIR_SHORT ? trend1hState == -1 and recentOk and htfOk : false
+
+f_dow_state_on_tf(string tf) =>
+    [_, _, prevLow, lastLow, _, _, prevHigh, lastHigh, _, _] = request.security(syminfo.tickerid, tf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+    f_dow_state(prevHigh, lastHigh, prevLow, lastLow)
 
 f_trade_levels(int dir, float swingHigh, float swingLow) =>
     float tp = na
@@ -316,6 +352,12 @@ int swingDir = f_swing_dir(lastHighTime, lastLowTime, lastHighPrice, lastLowPric
 bool haveSwingUp = swingDir == DIR_LONG
 bool haveSwingDown = swingDir == DIR_SHORT
 [zoneTopSeries, zoneBottomSeries] = f_zone_from_swing(swingDir, lastLowPrice, lastHighPrice, lowRatio, highRatio)
+int trend1h = f_dow_state(prevHighPrice, lastHighPrice, prevLowPrice, lastLowPrice)
+int trend4h = f_dow_state(h4PrevHighPrice, h4LastHighPrice, h4PrevLowPrice, h4LastLowPrice)
+int trendD = f_dow_state(dPrevHighPrice, dLastHighPrice, dPrevLowPrice, dLastLowPrice)
+int momentum1h = f_momentum_state(prevHighPrice, lastHighPrice, prevLowPrice, lastLowPrice)
+bool longAligned = trendD == 1 and trend4h == 1 and trend1h != -1
+bool shortAligned = trendD == -1 and trend4h == -1 and trend1h != 1
 
 bool inMorning = f_is_in_session(morningSession, morningTz)
 
@@ -350,7 +392,10 @@ var int tradeDir = DIR_NONE
 var float tpPrice = na
 var float slPrice = na
 var float entryPrice = na
+var int entryBarIndex = na
 var int[] closedTradeResults = array.new_int()  // RESULT_WIN / RESULT_LOSS
+var line activeTpLine = na
+var line activeSlLine = na
 bool longEntryMark = false
 bool shortEntryMark = false
 
@@ -358,10 +403,28 @@ float entryPivotLow = ta.pivotlow(low, pivotLen, pivotLen)
 float entryPivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
 float zoneTopAtPivot = zoneTopSeries[pivotLen]
 float zoneBottomAtPivot = zoneBottomSeries[pivotLen]
+float pivotRefHigh = high[pivotLen]
+float pivotRefLow = low[pivotLen]
 bool pivotLongInZone = f_pivot_in_zone(entryPivotLow, haveSwingUp[pivotLen], zoneTopAtPivot, zoneBottomAtPivot)
 bool pivotShortInZone = f_pivot_in_zone(entryPivotHigh, haveSwingDown[pivotLen], zoneTopAtPivot, zoneBottomAtPivot)
 bool closeInEntryZoneNow = f_price_in_zone(close, zoneTopSeries, zoneBottomSeries)
-int entrySignalDir = f_entry_signal(pivotLongInZone, pivotShortInZone, closeInEntryZoneNow)
+bool bullReversal = trend1h == 1 and trend1h[1] != 1
+bool bearReversal = trend1h == -1 and trend1h[1] != -1
+bool recentBullReversalOk = f_recent_reversal_ok(bullReversal, yosugaReversalBars, yosugaRequireRecentReversal)
+bool recentBearReversalOk = f_recent_reversal_ok(bearReversal, yosugaReversalBars, yosugaRequireRecentReversal)
+bool zoneLongOk = f_zone_gate_ok(yosugaRequireZone, pivotLongInZone, entryPivotLow)
+bool zoneShortOk = f_zone_gate_ok(yosugaRequireZone, pivotShortInZone, entryPivotHigh)
+bool htfLongOk = f_htf_alignment_ok(DIR_LONG, trendD, trend4h, yosugaRequireHtfAlign)
+bool htfShortOk = f_htf_alignment_ok(DIR_SHORT, trendD, trend4h, yosugaRequireHtfAlign)
+bool longStructureOk = f_side_structure_ok(DIR_LONG, trend1h, recentBullReversalOk, htfLongOk)
+bool shortStructureOk = f_side_structure_ok(DIR_SHORT, trend1h, recentBearReversalOk, htfShortOk)
+float breakUpPrice = f_break_price(DIR_LONG, pivotRefHigh, pivotRefLow, yosugaBreakBufferTicks)
+float breakDownPrice = f_break_price(DIR_SHORT, pivotRefHigh, pivotRefLow, yosugaBreakBufferTicks)
+bool longBreakConfirmed = zoneLongOk and longStructureOk and f_break_confirmed(DIR_LONG, breakUpPrice)
+bool shortBreakConfirmed = zoneShortOk and shortStructureOk and f_break_confirmed(DIR_SHORT, breakDownPrice)
+bool longCandidateMark = longBreakConfirmed
+bool shortCandidateMark = shortBreakConfirmed
+int entrySignalDir = longBreakConfirmed ? DIR_LONG : shortBreakConfirmed ? DIR_SHORT : DIR_NONE
 
 if not inTrade and entrySignalDir != DIR_NONE
     [nextTp, nextSl, canOpenTrade] = f_trade_levels(entrySignalDir, lastHighPrice, lastLowPrice)
@@ -371,38 +434,45 @@ if not inTrade and entrySignalDir != DIR_NONE
         entryPrice := close
         tpPrice := nextTp
         slPrice := nextSl
+        entryBarIndex := bar_index
         longEntryMark := entrySignalDir == DIR_LONG
         shortEntryMark := entrySignalDir == DIR_SHORT
+        activeTpLine := line.new(bar_index, tpPrice, bar_index + 1, tpPrice, xloc=xloc.bar_index, extend=extend.right, color=color.new(color.lime, 0), width=1, style=line.style_dashed)
+        activeSlLine := line.new(bar_index, slPrice, bar_index + 1, slPrice, xloc=xloc.bar_index, extend=extend.right, color=color.new(color.red, 0), width=1, style=line.style_dashed)
 
-if inTrade
+bool canJudgeTradeResult = inTrade and not na(entryBarIndex) and bar_index > entryBarIndex
+if canJudgeTradeResult
     int result = f_trade_result(tradeDir, tpPrice, slPrice)
     if result != RESULT_NONE
         array.push(closedTradeResults, result)
+        if not na(activeTpLine)
+            line.delete(activeTpLine)
+            activeTpLine := na
+        if not na(activeSlLine)
+            line.delete(activeSlLine)
+            activeSlLine := na
         inTrade := false
         tradeDir := DIR_NONE
         tpPrice := na
         slPrice := na
         entryPrice := na
+        entryBarIndex := na
 
 plotshape(longEntryMark, title="Long Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="L")
 plotshape(shortEntryMark, title="Short Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
+float tpEntrySymbol = (longEntryMark or shortEntryMark) ? tpPrice : na
+float slEntrySymbol = (longEntryMark or shortEntryMark) ? slPrice : na
+plotshape(tpEntrySymbol, title="TP Symbol", style=shape.diamond, location=location.absolute, color=color.new(color.lime, 0), size=size.tiny)
+plotshape(slEntrySymbol, title="SL Symbol", style=shape.xcross, location=location.absolute, color=color.new(color.red, 0), size=size.tiny)
+plotshape(showEntryCandidates and longCandidateMark, title="Long Entry Candidate", style=shape.circle, location=location.belowbar, color=color.new(color.lime, 70), size=size.tiny, text="CL")
+plotshape(showEntryCandidates and shortCandidateMark, title="Short Entry Candidate", style=shape.circle, location=location.abovebar, color=color.new(color.red, 70), size=size.tiny, text="CS")
 
 // === Dow trend table (multi-timeframe) ===
-[_, _, d0PrevLow, d0LastLow, _, _, d0PrevHigh, d0LastHigh, _, _] = request.security(syminfo.tickerid, dowTf0, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
-[_, _, d1PrevLow, d1LastLow, _, _, d1PrevHigh, d1LastHigh, _, _] = request.security(syminfo.tickerid, dowTf1, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
-[_, _, d2PrevLow, d2LastLow, _, _, d2PrevHigh, d2LastHigh, _, _] = request.security(syminfo.tickerid, dowTf2, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
-[_, _, d3PrevLow, d3LastLow, _, _, d3PrevHigh, d3LastHigh, _, _] = request.security(syminfo.tickerid, dowTf3, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
-[_, _, d4PrevLow, d4LastLow, _, _, d4PrevHigh, d4LastHigh, _, _] = request.security(syminfo.tickerid, dowTf4, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
-
-int dow0 = f_dow_state(d0PrevHigh, d0LastHigh, d0PrevLow, d0LastLow)
-int dow1 = f_dow_state(d1PrevHigh, d1LastHigh, d1PrevLow, d1LastLow)
-int dow2 = f_dow_state(d2PrevHigh, d2LastHigh, d2PrevLow, d2LastLow)
-int dow3 = f_dow_state(d3PrevHigh, d3LastHigh, d3PrevLow, d3LastLow)
-int dow4 = f_dow_state(d4PrevHigh, d4LastHigh, d4PrevLow, d4LastLow)
-int trend1h = f_dow_state(prevHighPrice, lastHighPrice, prevLowPrice, lastLowPrice)
-int trend4h = f_dow_state(h4PrevHighPrice, h4LastHighPrice, h4PrevLowPrice, h4LastLowPrice)
-int trendD = f_dow_state(dPrevHighPrice, dLastHighPrice, dPrevLowPrice, dLastLowPrice)
-int momentum1h = f_momentum_state(prevHighPrice, lastHighPrice, prevLowPrice, lastLowPrice)
+int dow0 = f_dow_state_on_tf(dowTf0)
+int dow1 = f_dow_state_on_tf(dowTf1)
+int dow2 = f_dow_state_on_tf(dowTf2)
+int dow3 = f_dow_state_on_tf(dowTf3)
+int dow4 = f_dow_state_on_tf(dowTf4)
 
 var table dowTable = table.new(position.bottom_right, 2, 6, bgcolor=color.new(color.black, 80))
 if barstate.islast and showDowTrendTable
@@ -415,23 +485,23 @@ if barstate.islast and showDowTrendTable
     f_set_dow_row(dowTable, 5, dowTf4, dow4)
 
 scenarioPos = scenarioPositionOpt == "Top Left" ? position.top_left : scenarioPositionOpt == "Top Center" ? position.top_center : scenarioPositionOpt == "Top Right" ? position.top_right : scenarioPositionOpt == "Bottom Left" ? position.bottom_left : scenarioPositionOpt == "Bottom Center" ? position.bottom_center : position.bottom_right
-var table scenarioTable = table.new(scenarioPos, 1, 8, bgcolor=color.new(color.black, 80))
+var table scenarioTable = table.new(scenarioPos, 1, 9, bgcolor=color.new(color.black, 80))
 if barstate.islast and showScenarioTable
     string marketBias = f_bias_label(trendD, trend4h)
-    bool longAligned = trendD == 1 and trend4h == 1 and trend1h != -1
-    bool shortAligned = trendD == -1 and trend4h == -1 and trend1h != 1
     string longPlan = longAligned ? (closeInEntryZoneNow ? "LONG: zone rebound setup. Trigger on bullish break." : "LONG: wait for pullback into entry zone.") : "LONG: lower priority."
     string shortPlan = shortAligned ? (closeInEntryZoneNow ? "SHORT: zone rejection setup. Trigger on bearish break." : "SHORT: wait for rally into entry zone.") : "SHORT: lower priority."
     string riskLine = longAligned and shortAligned ? "RISK: mixed signal, reduce size." : longAligned ? "RISK: invalidate below recent swing low." : shortAligned ? "RISK: invalidate above recent swing high." : "RISK: no edge, stay selective."
     string momentumLine = str.format("Momentum(1H): {0}", f_momentum_label(momentum1h))
+    string yosugaGate = str.format("YosugaGate L[{0}/{1}/{2}] S[{3}/{4}/{5}]", longStructureOk ? "OK" : "NG", zoneLongOk ? "OK" : "NG", longBreakConfirmed ? "OK" : "NG", shortStructureOk ? "OK" : "NG", zoneShortOk ? "OK" : "NG", shortBreakConfirmed ? "OK" : "NG")
     table.cell(scenarioTable, 0, 0, "Scenario", text_color=color.white)
     table.cell(scenarioTable, 0, 1, str.format("Bias: {0}", marketBias), text_color=color.white)
     table.cell(scenarioTable, 0, 2, str.format("Trend D/H4/1H: {0}/{1}/{2}", f_dow_label(trendD), f_dow_label(trend4h), f_dow_label(trend1h)), text_color=color.white)
     table.cell(scenarioTable, 0, 3, momentumLine, text_color=f_momentum_color(momentum1h))
-    table.cell(scenarioTable, 0, 4, str.format("Zone: {0}", f_zone_label(closeInEntryZoneNow)), text_color=color.white)
-    table.cell(scenarioTable, 0, 5, longPlan, text_color=color.new(color.lime, 0))
-    table.cell(scenarioTable, 0, 6, shortPlan, text_color=color.new(color.red, 0))
-    table.cell(scenarioTable, 0, 7, riskLine, text_color=color.new(color.yellow, 0))
+    table.cell(scenarioTable, 0, 4, yosugaGate, text_color=color.new(color.silver, 0))
+    table.cell(scenarioTable, 0, 5, str.format("Zone: {0}", f_zone_label(closeInEntryZoneNow)), text_color=color.white)
+    table.cell(scenarioTable, 0, 6, longPlan, text_color=color.new(color.lime, 0))
+    table.cell(scenarioTable, 0, 7, shortPlan, text_color=color.new(color.red, 0))
+    table.cell(scenarioTable, 0, 8, riskLine, text_color=color.new(color.yellow, 0))
 
 // === Stats table ===
 var table stats = table.new(position.top_right, 2, 3, bgcolor=color.new(color.black, 80))
