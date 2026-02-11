@@ -47,6 +47,10 @@ yosugaRequireZone = input.bool(true, "Yosuga: Require Pullback In Zone")
 yosugaRequireRecentReversal = input.bool(false, "Yosuga: Require Recent Reversal")
 yosugaRequireHtfAlign = input.bool(false, "Yosuga: Require D/H4 Alignment")
 showEntryCandidates = input.bool(true, "Show All Entry Candidates")
+showNextReversalPoint = input.bool(true, "Show Next Trend Reversal Point")
+nextReversalLineColor = input.color(color.new(color.white, 0), "Next Reversal Line Color")
+showReversalMarkers = input.bool(true, "Show Reversal Markers")
+showScenarioReversalCandidates = input.bool(true, "Show Scenario Reversal Candidates")
 
 // === Constants ===
 DIR_NONE = 0
@@ -359,6 +363,25 @@ int momentum1h = f_momentum_state(prevHighPrice, lastHighPrice, prevLowPrice, la
 bool longAligned = trendD == 1 and trend4h == 1 and trend1h != -1
 bool shortAligned = trendD == -1 and trend4h == -1 and trend1h != 1
 
+// Current-trend invalidation level shown as "next reversal point".
+float nextReversalPrice = trend1h == 1 ? lastLowPrice : trend1h == -1 ? lastHighPrice : na
+string nextReversalText = trend1h == 1 ? "Next REV (Down): " : trend1h == -1 ? "Next REV (Up): " : "Next REV: "
+float nextBearReversalCandidate = trend1h == 1 or trend1h == 0 ? lastLowPrice : na
+float nextBullReversalCandidate = trend1h == -1 or trend1h == 0 ? lastHighPrice : na
+var line nextReversalLine = na
+var label nextReversalLabel = na
+
+if barstate.islast
+    if not na(nextReversalLine)
+        line.delete(nextReversalLine)
+        nextReversalLine := na
+    if not na(nextReversalLabel)
+        label.delete(nextReversalLabel)
+        nextReversalLabel := na
+    if showNextReversalPoint and not na(nextReversalPrice)
+        nextReversalLine := line.new(time, nextReversalPrice, time + dayMs, nextReversalPrice, xloc=xloc.bar_time, extend=extend.right, color=nextReversalLineColor, width=1, style=line.style_dotted)
+        nextReversalLabel := label.new(time, nextReversalPrice, nextReversalText + str.tostring(nextReversalPrice, format.price), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.white, color=color.new(color.black, 0), size=size.tiny)
+
 bool inMorning = f_is_in_session(morningSession, morningTz)
 
 if barstate.islast
@@ -466,6 +489,11 @@ plotshape(tpEntrySymbol, title="TP Symbol", style=shape.diamond, location=locati
 plotshape(slEntrySymbol, title="SL Symbol", style=shape.xcross, location=location.absolute, color=color.new(color.red, 0), size=size.tiny)
 plotshape(showEntryCandidates and longCandidateMark, title="Long Entry Candidate", style=shape.circle, location=location.belowbar, color=color.new(color.lime, 70), size=size.tiny, text="CL")
 plotshape(showEntryCandidates and shortCandidateMark, title="Short Entry Candidate", style=shape.circle, location=location.abovebar, color=color.new(color.red, 70), size=size.tiny, text="CS")
+plotshape(showReversalMarkers and barstate.islast ? nextReversalPrice : na, title="Next Reversal Marker", style=shape.diamond, location=location.absolute, color=nextReversalLineColor, size=size.tiny, text="REV")
+plotshape(showReversalMarkers and bullReversal, title="Bull Reversal", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.tiny, text="REV↑")
+plotshape(showReversalMarkers and bearReversal, title="Bear Reversal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.tiny, text="REV↓")
+plotshape(showScenarioReversalCandidates and barstate.islast ? nextBullReversalCandidate : na, title="Next Bull Reversal Candidate", style=shape.circle, location=location.absolute, color=color.new(color.lime, 0), size=size.small, text="UP?")
+plotshape(showScenarioReversalCandidates and barstate.islast ? nextBearReversalCandidate : na, title="Next Bear Reversal Candidate", style=shape.circle, location=location.absolute, color=color.new(color.red, 0), size=size.small, text="DN?")
 
 // === Dow trend table (multi-timeframe) ===
 int dow0 = f_dow_state_on_tf(dowTf0)
