@@ -6,6 +6,8 @@ useAtrFilter = input.bool(true, "Filter Small Swings")
 atrLen = input.int(14, "ATR Length", minval=1)
 minSwingAtr = input.float(0.4, "Min Swing (ATR)", minval=0.0, step=0.1)
 trendTf = input.timeframe("60", "Trend Timeframe")
+isStock = syminfo.type == "stock"
+zoneCalcTf = isStock ? "D" : trendTf
 zoneRatio1 = input.float(0.382, "Zone Ratio 1", minval=0.0, maxval=1.0, step=0.01)
 zoneRatio2 = input.float(0.786, "Zone Ratio 2", minval=0.0, maxval=1.0, step=0.01)
 showZone = input.bool(true, "Show Entry Zone")
@@ -108,7 +110,7 @@ f_trend_state() =>
 
     [swingUpLow, swingUpHigh, swingUpLowTime, swingUpHighTime, swingDownHigh, swingDownLow, swingDownHighTime, swingDownLowTime, trendUp, trendDown]
 
-[tfSwingUpLow, tfSwingUpHigh, tfSwingUpLowTime, tfSwingUpHighTime, tfSwingDownHigh, tfSwingDownLow, tfSwingDownHighTime, tfSwingDownLowTime, tfTrendUp, tfTrendDown] = request.security(syminfo.tickerid, trendTf, f_trend_state(), barmerge.gaps_off, barmerge.lookahead_off)
+[tfSwingUpLow, tfSwingUpHigh, tfSwingUpLowTime, tfSwingUpHighTime, tfSwingDownHigh, tfSwingDownLow, tfSwingDownHighTime, tfSwingDownLowTime, tfTrendUp, tfTrendDown] = request.security(syminfo.tickerid, zoneCalcTf, f_trend_state(), barmerge.gaps_off, barmerge.lookahead_off)
 bool trendAgreeLong = tfTrendUp
 bool trendAgreeShort = tfTrendDown
 
@@ -367,8 +369,8 @@ if barstate.islast
             zoneBottomLine := line.new(zoneStartTime, zoneBottom, zoneEndTime, zoneBottom, xloc=xloc.bar_time, extend=extend.right, color=zoneColor, width=zoneLineWidth, style=zoneLineStyle)
             if showLineLabels
                 string dirNow = trendDir == 1 ? "Up" : trendDir == -1 ? "Down" : "Side"
-                zoneTopLabel := label.new(zoneStartTime, zoneTop, str.format("{0} {1} Top (r={2})", trendTf, dirNow, lowRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
-                zoneBottomLabel := label.new(zoneStartTime, zoneBottom, str.format("{0} {1} Bot (r={2})", trendTf, dirNow, highRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                zoneTopLabel := label.new(zoneStartTime, zoneTop, str.format("{0} {1} Top (r={2})", zoneCalcTf, dirNow, lowRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                zoneBottomLabel := label.new(zoneStartTime, zoneBottom, str.format("{0} {1} Bot (r={2})", zoneCalcTf, dirNow, highRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
             lastZoneTop := zoneTop
             lastZoneBottom := zoneBottom
 
@@ -388,8 +390,8 @@ if barstate.isconfirmed
             array.push(zoneHistory, l2)
             if showLineLabels
                 string dirHist = trendDir == 1 ? "Up" : trendDir == -1 ? "Down" : "Side"
-                label lt = label.new(x1, zoneTopHist, str.format("{0} {1} Top (r={2})", trendTf, dirHist, lowRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
-                label lb = label.new(x1, zoneBottomHist, str.format("{0} {1} Bot (r={2})", trendTf, dirHist, highRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                label lt = label.new(x1, zoneTopHist, str.format("{0} {1} Top (r={2})", zoneCalcTf, dirHist, lowRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
+                label lb = label.new(x1, zoneBottomHist, str.format("{0} {1} Bot (r={2})", zoneCalcTf, dirHist, highRatio), xloc=xloc.bar_time, style=label.style_label_left, textcolor=color.black, color=zoneColor, size=size.tiny)
                 array.push(zoneLabelHistory, lt)
                 array.push(zoneLabelHistory, lb)
             lastZoneTop := zoneTopHist

@@ -1,9 +1,11 @@
 //@version=5
-indicator("Trendline (Lows, 1H)", overlay=true, max_lines_count=200)
+indicator("Trendline_yosuga", overlay=true, max_lines_count=200)
 
 // === Inputs ===
 pivotLen = input.int(4, "Pivot Length", minval=1)
 trendTf = input.timeframe("60", "Trend Timeframe (1H)")
+isStock = syminfo.type == "stock"
+baseTrendTf = isStock ? "D" : trendTf
 showH4Trendlines = input.bool(true, "Show H4 Trendlines")
 showDailyTrendlines = input.bool(true, "Show Daily Trendlines")
 requireHigherHighs = input.bool(true, "Require Higher Highs (Uptrend)")
@@ -92,7 +94,7 @@ f_pivots_4h() =>
 
     [prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, not na(pl), not na(ph)]
 
-[prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow, newPivotHigh] = request.security(syminfo.tickerid, trendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
+[prevLowTime, lastLowTime, prevLowPrice, lastLowPrice, prevHighTime, lastHighTime, prevHighPrice, lastHighPrice, newPivotLow, newPivotHigh] = request.security(syminfo.tickerid, baseTrendTf, f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
 [h4PrevLowTime, h4LastLowTime, h4PrevLowPrice, h4LastLowPrice, h4PrevHighTime, h4LastHighTime, h4PrevHighPrice, h4LastHighPrice, h4NewPivotLow, h4NewPivotHigh] = request.security(syminfo.tickerid, "240", f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
 [dPrevLowTime, dLastLowTime, dPrevLowPrice, dLastLowPrice, dPrevHighTime, dLastHighTime, dPrevHighPrice, dLastHighPrice, dNewPivotLow, dNewPivotHigh] = request.security(syminfo.tickerid, "D", f_pivots_4h(), barmerge.gaps_off, barmerge.lookahead_off)
 
@@ -515,15 +517,16 @@ if barstate.islast and showDowTrendTable
 scenarioPos = scenarioPositionOpt == "Top Left" ? position.top_left : scenarioPositionOpt == "Top Center" ? position.top_center : scenarioPositionOpt == "Top Right" ? position.top_right : scenarioPositionOpt == "Bottom Left" ? position.bottom_left : scenarioPositionOpt == "Bottom Center" ? position.bottom_center : position.bottom_right
 var table scenarioTable = table.new(scenarioPos, 1, 9, bgcolor=color.new(color.black, 80))
 if barstate.islast and showScenarioTable
+    string baseTrendLabel = isStock ? "D" : "1H"
     string marketBias = f_bias_label(trendD, trend4h)
     string longPlan = longAligned ? (closeInEntryZoneNow ? "LONG: zone rebound setup. Trigger on bullish break." : "LONG: wait for pullback into entry zone.") : "LONG: lower priority."
     string shortPlan = shortAligned ? (closeInEntryZoneNow ? "SHORT: zone rejection setup. Trigger on bearish break." : "SHORT: wait for rally into entry zone.") : "SHORT: lower priority."
     string riskLine = longAligned and shortAligned ? "RISK: mixed signal, reduce size." : longAligned ? "RISK: invalidate below recent swing low." : shortAligned ? "RISK: invalidate above recent swing high." : "RISK: no edge, stay selective."
-    string momentumLine = str.format("Momentum(1H): {0}", f_momentum_label(momentum1h))
+    string momentumLine = str.format("Momentum({0}): {1}", baseTrendLabel, f_momentum_label(momentum1h))
     string yosugaGate = str.format("YosugaGate L[{0}/{1}/{2}] S[{3}/{4}/{5}]", longStructureOk ? "OK" : "NG", zoneLongOk ? "OK" : "NG", longBreakConfirmed ? "OK" : "NG", shortStructureOk ? "OK" : "NG", zoneShortOk ? "OK" : "NG", shortBreakConfirmed ? "OK" : "NG")
     table.cell(scenarioTable, 0, 0, "Scenario", text_color=color.white)
     table.cell(scenarioTable, 0, 1, str.format("Bias: {0}", marketBias), text_color=color.white)
-    table.cell(scenarioTable, 0, 2, str.format("Trend D/H4/1H: {0}/{1}/{2}", f_dow_label(trendD), f_dow_label(trend4h), f_dow_label(trend1h)), text_color=color.white)
+    table.cell(scenarioTable, 0, 2, str.format("Trend D/H4/{0}: {1}/{2}/{3}", baseTrendLabel, f_dow_label(trendD), f_dow_label(trend4h), f_dow_label(trend1h)), text_color=color.white)
     table.cell(scenarioTable, 0, 3, momentumLine, text_color=f_momentum_color(momentum1h))
     table.cell(scenarioTable, 0, 4, yosugaGate, text_color=color.new(color.silver, 0))
     table.cell(scenarioTable, 0, 5, str.format("Zone: {0}", f_zone_label(closeInEntryZoneNow)), text_color=color.white)
