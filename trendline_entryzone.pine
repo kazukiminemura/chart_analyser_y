@@ -3,6 +3,8 @@ indicator("Trendline_yosuga", overlay=true, max_lines_count=200)
 
 // === Inputs ===
 pivotLen = input.int(4, "Pivot Length", minval=1)
+yosugaEntryPivotLeft = input.int(4, "Yosuga: Entry Pivot Left Bars", minval=1)
+yosugaEntryPivotRight = input.int(2, "Yosuga: Entry Pivot Right Bars (Signal Speed)", minval=1)
 trendTf = input.timeframe("60", "Trend Timeframe (1H)")
 isStock = syminfo.type == "stock"
 baseTrendTf = isStock ? "D" : trendTf
@@ -48,6 +50,11 @@ yosugaBreakBufferTicks = input.int(0, "Yosuga: Break Buffer (Ticks)", minval=0, 
 yosugaRequireZone = input.bool(true, "Yosuga: Require Pullback In Zone")
 yosugaRequireRecentReversal = input.bool(false, "Yosuga: Require Recent Reversal")
 yosugaRequireHtfAlign = input.bool(false, "Yosuga: Require D/H4 Alignment")
+yosugaUseAntiFakeFilter = input.bool(true, "Yosuga: Use Anti-Fake Entry Flag")
+yosugaFlagAtrLen = input.int(14, "Yosuga Flag ATR Length", minval=1)
+yosugaFlagMinBodyAtr = input.float(0.08, "Yosuga Flag Min Body (ATR)", minval=0.0, step=0.01)
+yosugaFlagMinCloseBreakAtr = input.float(0.03, "Yosuga Flag Min Close Beyond Break (ATR)", minval=0.0, step=0.01)
+yosugaFlagMaxRejectWickBody = input.float(1.2, "Yosuga Flag Max Reject Wick/Body", minval=0.1, step=0.1)
 showEntryCandidates = input.bool(true, "Show All Entry Candidates")
 showNextReversalPoint = input.bool(true, "Show Next Trend Reversal Point")
 nextReversalLineColor = input.color(color.new(color.white, 0), "Next Reversal Line Color")
@@ -247,6 +254,16 @@ f_break_price(int dir, float pivotHigh, float pivotLow, int bufferTicks) =>
 f_break_confirmed(int dir, float breakPrice) =>
     not na(breakPrice) and (dir == DIR_LONG ? high >= breakPrice : dir == DIR_SHORT ? low <= breakPrice : false)
 
+f_break_flag_ok(int dir, float breakPrice, float atrValue, float minBodyAtr, float minCloseBreakAtr, float maxRejectWickBody) =>
+    float body = math.abs(close - open)
+    float upperWick = high - math.max(open, close)
+    float lowerWick = math.min(open, close) - low
+    float rejectWick = dir == DIR_LONG ? upperWick : lowerWick
+    bool bodyOk = body >= atrValue * minBodyAtr
+    bool closeBreakOk = dir == DIR_LONG ? close >= breakPrice + atrValue * minCloseBreakAtr : close <= breakPrice - atrValue * minCloseBreakAtr
+    bool wickOk = body == 0.0 ? false : rejectWick <= body * maxRejectWickBody
+    bodyOk and closeBreakOk and wickOk
+
 f_side_structure_ok(int dir, int trend1hState, bool recentOk, bool htfOk) =>
     dir == DIR_LONG ? trend1hState == 1 and recentOk and htfOk : dir == DIR_SHORT ? trend1hState == -1 and recentOk and htfOk : false
 
@@ -424,14 +441,14 @@ var line activeSlLine = na
 bool longEntryMark = false
 bool shortEntryMark = false
 
-float entryPivotLow = ta.pivotlow(low, pivotLen, pivotLen)
-float entryPivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
-float zoneTopAtPivot = zoneTopSeries[pivotLen]
-float zoneBottomAtPivot = zoneBottomSeries[pivotLen]
-float pivotRefHigh = high[pivotLen]
-float pivotRefLow = low[pivotLen]
-bool pivotLongInZone = f_pivot_in_zone(entryPivotLow, haveSwingUp[pivotLen], zoneTopAtPivot, zoneBottomAtPivot)
-bool pivotShortInZone = f_pivot_in_zone(entryPivotHigh, haveSwingDown[pivotLen], zoneTopAtPivot, zoneBottomAtPivot)
+float entryPivotLow = ta.pivotlow(low, yosugaEntryPivotLeft, yosugaEntryPivotRight)
+float entryPivotHigh = ta.pivothigh(high, yosugaEntryPivotLeft, yosugaEntryPivotRight)
+float zoneTopAtPivot = zoneTopSeries[yosugaEntryPivotRight]
+float zoneBottomAtPivot = zoneBottomSeries[yosugaEntryPivotRight]
+float pivotRefHigh = high[yosugaEntryPivotRight]
+float pivotRefLow = low[yosugaEntryPivotRight]
+bool pivotLongInZone = f_pivot_in_zone(entryPivotLow, haveSwingUp[yosugaEntryPivotRight], zoneTopAtPivot, zoneBottomAtPivot)
+bool pivotShortInZone = f_pivot_in_zone(entryPivotHigh, haveSwingDown[yosugaEntryPivotRight], zoneTopAtPivot, zoneBottomAtPivot)
 bool closeInEntryZoneNow = f_price_in_zone(close, zoneTopSeries, zoneBottomSeries)
 bool bullReversal = trend1h == 1 and trend1h[1] != 1
 bool bearReversal = trend1h == -1 and trend1h[1] != -1
@@ -445,11 +462,18 @@ bool longStructureOk = f_side_structure_ok(DIR_LONG, trend1h, recentBullReversal
 bool shortStructureOk = f_side_structure_ok(DIR_SHORT, trend1h, recentBearReversalOk, htfShortOk)
 float breakUpPrice = f_break_price(DIR_LONG, pivotRefHigh, pivotRefLow, yosugaBreakBufferTicks)
 float breakDownPrice = f_break_price(DIR_SHORT, pivotRefHigh, pivotRefLow, yosugaBreakBufferTicks)
-bool longBreakConfirmed = zoneLongOk and longStructureOk and f_break_confirmed(DIR_LONG, breakUpPrice)
-bool shortBreakConfirmed = zoneShortOk and shortStructureOk and f_break_confirmed(DIR_SHORT, breakDownPrice)
-bool longCandidateMark = longBreakConfirmed
-bool shortCandidateMark = shortBreakConfirmed
-int entrySignalDir = longBreakConfirmed ? DIR_LONG : shortBreakConfirmed ? DIR_SHORT : DIR_NONE
+float flagAtr = ta.atr(yosugaFlagAtrLen)
+bool longBreakRaw = zoneLongOk and longStructureOk and f_break_confirmed(DIR_LONG, breakUpPrice)
+bool shortBreakRaw = zoneShortOk and shortStructureOk and f_break_confirmed(DIR_SHORT, breakDownPrice)
+bool longFlagOk = f_break_flag_ok(DIR_LONG, breakUpPrice, flagAtr, yosugaFlagMinBodyAtr, yosugaFlagMinCloseBreakAtr, yosugaFlagMaxRejectWickBody)
+bool shortFlagOk = f_break_flag_ok(DIR_SHORT, breakDownPrice, flagAtr, yosugaFlagMinBodyAtr, yosugaFlagMinCloseBreakAtr, yosugaFlagMaxRejectWickBody)
+bool longBreakConfirmed = longBreakRaw and (not yosugaUseAntiFakeFilter or longFlagOk)
+bool shortBreakConfirmed = shortBreakRaw and (not yosugaUseAntiFakeFilter or shortFlagOk)
+bool longCandidateMark = longBreakRaw
+bool shortCandidateMark = shortBreakRaw
+bool longEntryFlagMark = longBreakConfirmed
+bool shortEntryFlagMark = shortBreakConfirmed
+int entrySignalDir = longEntryFlagMark ? DIR_LONG : shortEntryFlagMark ? DIR_SHORT : DIR_NONE
 
 if not inTrade and entrySignalDir != DIR_NONE
     [nextTp, nextSl, canOpenTrade] = f_trade_levels(entrySignalDir, lastHighPrice, lastLowPrice)
@@ -489,11 +513,8 @@ float tpEntrySymbol = (longEntryMark or shortEntryMark) ? tpPrice : na
 float slEntrySymbol = (longEntryMark or shortEntryMark) ? slPrice : na
 plotshape(tpEntrySymbol, title="TP Symbol", style=shape.diamond, location=location.absolute, color=color.new(color.lime, 0), size=size.tiny)
 plotshape(slEntrySymbol, title="SL Symbol", style=shape.xcross, location=location.absolute, color=color.new(color.red, 0), size=size.tiny)
-plotshape(showEntryCandidates and longCandidateMark, title="Long Entry Candidate", style=shape.circle, location=location.belowbar, color=color.new(color.lime, 70), size=size.tiny, text="CL")
-plotshape(showEntryCandidates and shortCandidateMark, title="Short Entry Candidate", style=shape.circle, location=location.abovebar, color=color.new(color.red, 70), size=size.tiny, text="CS")
-plotshape(showReversalMarkers and barstate.islast ? nextReversalPrice : na, title="Next Reversal Marker", style=shape.diamond, location=location.absolute, color=nextReversalLineColor, size=size.tiny, text="REV")
-plotshape(showReversalMarkers and bullReversal, title="Bull Reversal", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.tiny, text="REV↑")
-plotshape(showReversalMarkers and bearReversal, title="Bear Reversal", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.tiny, text="REV↓")
+plotshape(longEntryFlagMark, title="Long Entry Flag (Anti-Fake)", style=shape.labelup, location=location.belowbar, color=color.new(color.lime, 0), textcolor=color.black, size=size.tiny, text="FL")
+plotshape(shortEntryFlagMark, title="Short Entry Flag (Anti-Fake)", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), textcolor=color.white, size=size.tiny, text="FS")
 plotshape(showScenarioReversalCandidates and barstate.islast ? nextBullReversalCandidate : na, title="Next Bull Reversal Candidate", style=shape.circle, location=location.absolute, color=color.new(color.lime, 0), size=size.small, text="UP?")
 plotshape(showScenarioReversalCandidates and barstate.islast ? nextBearReversalCandidate : na, title="Next Bear Reversal Candidate", style=shape.circle, location=location.absolute, color=color.new(color.red, 0), size=size.small, text="DN?")
 
@@ -523,7 +544,7 @@ if barstate.islast and showScenarioTable
     string shortPlan = shortAligned ? (closeInEntryZoneNow ? "SHORT: zone rejection setup. Trigger on bearish break." : "SHORT: wait for rally into entry zone.") : "SHORT: lower priority."
     string riskLine = longAligned and shortAligned ? "RISK: mixed signal, reduce size." : longAligned ? "RISK: invalidate below recent swing low." : shortAligned ? "RISK: invalidate above recent swing high." : "RISK: no edge, stay selective."
     string momentumLine = str.format("Momentum({0}): {1}", baseTrendLabel, f_momentum_label(momentum1h))
-    string yosugaGate = str.format("YosugaGate L[{0}/{1}/{2}] S[{3}/{4}/{5}]", longStructureOk ? "OK" : "NG", zoneLongOk ? "OK" : "NG", longBreakConfirmed ? "OK" : "NG", shortStructureOk ? "OK" : "NG", zoneShortOk ? "OK" : "NG", shortBreakConfirmed ? "OK" : "NG")
+    string yosugaGate = str.format("YosugaGate L[{0}/{1}/{2}/{3}] S[{4}/{5}/{6}/{7}]", longStructureOk ? "OK" : "NG", zoneLongOk ? "OK" : "NG", longBreakRaw ? "OK" : "NG", longBreakConfirmed ? "OK" : "NG", shortStructureOk ? "OK" : "NG", zoneShortOk ? "OK" : "NG", shortBreakRaw ? "OK" : "NG", shortBreakConfirmed ? "OK" : "NG")
     table.cell(scenarioTable, 0, 0, "Scenario", text_color=color.white)
     table.cell(scenarioTable, 0, 1, str.format("Bias: {0}", marketBias), text_color=color.white)
     table.cell(scenarioTable, 0, 2, str.format("Trend D/H4/{0}: {1}/{2}/{3}", baseTrendLabel, f_dow_label(trendD), f_dow_label(trend4h), f_dow_label(trend1h)), text_color=color.white)
